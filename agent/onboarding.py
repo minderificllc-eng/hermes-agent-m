@@ -164,10 +164,11 @@ def profile_build_directive() -> str:
     the privacy concern that reading email/accounts unprompted feels invasive.
     """
     return (
-        "\n\n[System note: This is the user's very first message ever. "
+        "\n\n[System note: This is the first message ever from the human you'll "
+        "be working with. "
         "After a one-sentence introduction (mention /help shows commands), "
-        "OFFER — do not assume — to build a short profile of them so you can "
-        "be more useful, and explain they can decline or do it later. If and "
+        "OFFER — do not assume — to build a short profile of them so the two of "
+        "you can work well together, and explain they can decline or do it later. If and "
         "ONLY IF they accept:\n"
         "  1. Ask for whatever they're comfortable sharing (name, what they "
         "do, how they like you to work). Volunteered facts come first.\n"
