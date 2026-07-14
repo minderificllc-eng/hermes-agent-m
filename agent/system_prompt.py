@@ -114,7 +114,7 @@ def _resolve_platform_hint(agent: Any, platform_key: str, default_hint: str) -> 
 
 
 _TUI_EMBEDDED_PANE_CLARIFIER = (
-    " You're in its embedded terminal pane, beside the GUI chat — the user can "
+    " You're in its embedded terminal pane, beside the GUI chat — the human can "
     "select your output (Option-drag on macOS, Shift-drag elsewhere) and press "
     "Cmd/Ctrl+L to send it to the chat composer."
 )
@@ -398,7 +398,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             "under ~/.hermes/profiles/<name>/. Each profile has its own "
             "skills/, plugins/, cron/, and memories/ that affect a different "
             "session than this one. Do not modify another profile's "
-            "skills/plugins/cron/memories unless the user explicitly directs "
+            "skills/plugins/cron/memories unless the human explicitly directs "
             "you to."
         )
     else:
@@ -408,7 +408,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             f"profile's data lives at ~/.hermes/skills/, ~/.hermes/plugins/, "
             f"~/.hermes/cron/, ~/.hermes/memories/ — those belong to a "
             f"different session run from a different shell. Do NOT modify "
-            f"another profile's skills/plugins/cron/memories unless the user "
+            f"another profile's skills/plugins/cron/memories unless the human "
             f"explicitly directs you to. The cross-profile write guard will "
             f"refuse such writes by default; pass cross_profile=True only "
             f"after explicit direction."

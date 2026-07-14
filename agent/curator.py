@@ -1664,7 +1664,7 @@ def run_curator_review(
                         "remain strictly off-limits. Treat a stale built-in the "
                         "same as a stale agent-created skill: archive it (never "
                         "delete). It will be restored on `hermes update` only if "
-                        "the user explicitly restores it."
+                        "the human explicitly restores it."
                     )
                 if dry_run:
                     prompt = (

@@ -343,8 +343,8 @@ def build_memory_context_block(raw_context: str) -> str:
     return (
         "<memory-context>\n"
         "[System note: The following is recalled memory context, "
-        "NOT new user input. Treat as authoritative reference data — "
-        "this is the agent's persistent memory and should inform all responses.]\n\n"
+        "NOT a new message from the human. Treat as authoritative reference data — "
+        "this is your own persistent memory and should inform all responses.]\n\n"
         f"{clean}\n"
         "</memory-context>"
     )

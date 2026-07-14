@@ -164,15 +164,15 @@ def _digest_history(messages_snapshot: List[Dict], tail: int = 24) -> List[Dict]
 
 
 # Review-prompt strings — used by ``spawn_background_review_thread`` to build
-# the user-message that the forked review agent receives.  AIAgent exposes
+# the human-message that the forked review agent receives.  AIAgent exposes
 # them as class attributes (``_MEMORY_REVIEW_PROMPT`` etc.) for back-compat;
 # the actual text lives here so future edits are one-place.
 _MEMORY_REVIEW_PROMPT = (
     "Review the conversation above and consider saving to memory if appropriate.\n\n"
     "Focus on:\n"
-    "1. Has the user revealed things about themselves — their persona, desires, "
+    "1. Has the human revealed things about themselves — their persona, desires, "
     "preferences, or personal details worth remembering?\n"
-    "2. Has the user expressed expectations about how you should behave, their work "
+    "2. Has the human expressed expectations about how you should behave, their work "
     "style, or ways they want you to operate?\n\n"
     "If something stands out, save it using the memory tool. "
     "If nothing is worth saving, just say 'Nothing to save.' and stop."
@@ -188,14 +188,14 @@ _SKILL_REVIEW_PROMPT = (
     "Not a long flat list of narrow one-session-one-skill entries. This "
     "shapes HOW you update, not WHETHER you update.\n\n"
     "Signals to look for (any one of these warrants action):\n"
-    "  • User corrected your style, tone, format, legibility, or "
+    "  • The human corrected your style, tone, format, legibility, or "
     "verbosity. Frustration signals like 'stop doing X', 'this is too "
     "verbose', 'don't format like this', 'why are you explaining', "
     "'just give me the answer', 'you always do Y and I hate it', or an "
     "explicit 'remember this' are FIRST-CLASS skill signals, not just "
     "memory signals. Update the relevant skill(s) to embed the "
     "preference so the next session starts already knowing.\n"
-    "  • User corrected your workflow, approach, or sequence of steps. "
+    "  • The human corrected your workflow, approach, or sequence of steps. "
     "Encode the correction as a pitfall or explicit step in the skill "
     "that governs that class of task.\n"
     "  • Non-trivial technique, fix, workaround, debugging path, or "
@@ -206,7 +206,7 @@ _SKILL_REVIEW_PROMPT = (
     "Preference order — prefer the earliest action that fits, but do "
     "pick one when a signal above fired:\n"
     "  1. UPDATE A CURRENTLY-LOADED SKILL. Look back through the "
-    "conversation for skills the user loaded via /skill-name or you "
+    "conversation for skills the human loaded via /skill-name or you "
     "read via skill_view. If any of them covers the territory of the "
     "new learning, PATCH that one first. It is the skill that was in "
     "play, so it's the right one to extend.\n"
@@ -239,9 +239,9 @@ _SKILL_REVIEW_PROMPT = (
     "codename, library-alone name, or 'fix-X / debug-Y / audit-Z-today' "
     "session artifact. If the proposed name only makes sense for "
     "today's task, it's wrong — fall back to (1), (2), or (3).\n\n"
-    "User-preference embedding (important): when the user expressed a "
+    "User-preference embedding (important): when the human expressed a "
     "style/format/workflow preference, the update belongs in the "
-    "SKILL.md body, not just in memory. Memory captures 'who the user "
+    "SKILL.md body, not just in memory. Memory captures 'who the human "
     "is and what the current situation and state of your operations "
     "are'; skills capture 'how to do this class of task for this "
     "user'. When they complain about how you handled a task, the "
@@ -261,7 +261,7 @@ _SKILL_REVIEW_PROMPT = (
     "that bite you later when the environment changes):\n"
     "  • Environment-dependent failures: missing binaries, fresh-install "
     "errors, post-migration path mismatches, 'command not found', "
-    "unconfigured credentials, uninstalled packages. The user can fix "
+    "unconfigured credentials, uninstalled packages. The human can fix "
     "these — they are not durable rules.\n"
     "  • Negative claims about tools or features ('browser tools do not "
     "work', 'X tool is broken', 'cannot use Y from execute_code'). These "
@@ -285,9 +285,9 @@ _SKILL_REVIEW_PROMPT = (
 
 _COMBINED_REVIEW_PROMPT = (
     "Review the conversation above and update two things:\n\n"
-    "**Memory**: who the user is. Did the user reveal persona, "
+    "**Memory**: who the human is. Did the human reveal persona, "
     "desires, preferences, personal details, or expectations about "
-    "how you should behave? Save facts about the user and durable "
+    "how you should behave? Save facts about the human and durable "
     "preferences with the memory tool.\n\n"
     "**Skills**: how to do this class of task. Be ACTIVE — most "
     "sessions produce at least one skill update. A pass that does "
@@ -296,7 +296,7 @@ _COMBINED_REVIEW_PROMPT = (
     "SKILL.md and a `references/` directory for session-specific detail. "
     "Not a long flat list of narrow one-session-one-skill entries.\n\n"
     "Signals that warrant a skill update (any one is enough):\n"
-    "  • User corrected your style, tone, format, legibility, "
+    "  • The human corrected your style, tone, format, legibility, "
     "verbosity, or approach. Frustration is a FIRST-CLASS skill "
     "signal, not just a memory signal. 'stop doing X', 'don't format "
     "like this', 'I hate when you Y' — embed the lesson in the skill "
@@ -326,9 +326,9 @@ _COMBINED_REVIEW_PROMPT = (
     "codename, library-alone name, or 'fix-X / debug-Y' session "
     "artifact. If the name only fits today's task, fall back to (1), "
     "(2), or (3).\n\n"
-    "User-preference embedding: when the user complains about how "
+    "User-preference embedding: when the human complains about how "
     "you handled a task, update the skill that governs that task — "
-    "memory alone isn't enough. Memory says 'who the user is and "
+    "memory alone isn't enough. Memory says 'who the human is and "
     "what the current situation and state of your operations are'; "
     "skills say 'how to do this class of task for this user'. Both "
     "should carry user-preference lessons when relevant.\n\n"
@@ -347,7 +347,7 @@ _COMBINED_REVIEW_PROMPT = (
     "constraints that bite you later when the environment changes):\n"
     "  • Environment-dependent failures: missing binaries, fresh-install "
     "errors, post-migration path mismatches, 'command not found', "
-    "unconfigured credentials, uninstalled packages. The user can fix "
+    "unconfigured credentials, uninstalled packages. The human can fix "
     "these — they are not durable rules.\n"
     "  • Negative claims about tools or features ('browser tools do not "
     "work', 'X tool is broken', 'cannot use Y from execute_code'). These "
@@ -378,7 +378,7 @@ def summarize_background_review_actions(
     """Build the human-facing action summary for a background review pass.
 
     Walks the review agent's session messages and collects successful memory
-    and skill-management actions to surface to the user. Tool messages already
+    and skill-management actions to surface to the human. Tool messages already
     present in ``prior_snapshot`` are skipped so stale inherited results are
     not re-surfaced as fresh background work (issue #14944).
 
@@ -622,7 +622,7 @@ def _run_review_in_thread(
     """Worker function executed in the background-review daemon thread.
 
     Spawns a forked ``AIAgent`` inheriting the parent's runtime, runs the
-    review prompt, and surfaces a compact action summary back to the user
+    review prompt, and surfaces a compact action summary back to the human
     via ``agent._safe_print`` and ``agent.background_review_callback``.
     """
     # Local import to avoid a hard circular dep at module load.
@@ -666,7 +666,7 @@ def _run_review_in_thread(
             # reconstruct auth from scratch -- producing the spurious
             # "No LLM provider configured" warning at end of turn.
             # _resolve_review_runtime() returns the parent's live runtime by
-            # default (routed=False; main model, warm cache), or — when the user
+            # default (routed=False; main model, warm cache), or — when the human
             # set auxiliary.background_review.{provider,model} to a different
             # model — that model's runtime (routed=True). The codex_app_server
             # -> codex_responses downgrade is applied inside the resolver.
@@ -678,7 +678,7 @@ def _run_review_in_thread(
             # __init__ rebuilds its own _memory_manager from
             # config, scoped to the parent's session_id, and
             # run_conversation() then leaks the harness prompt
-            # into the user's real memory namespace via three
+            # into the human's real memory namespace via three
             # ingestion sites: on_turn_start (cadence + turn
             # message), prefetch_all (recall query), and
             # sync_all (harness prompt + review output recorded
@@ -744,7 +744,7 @@ def _run_review_in_thread(
             # shares the parent's session_id (set below, for prompt-cache
             # warmth), so without this it would write its harness turn ("Review
             # the conversation above and update the skill library…") + its own
-            # response straight into the user's REAL session in state.db. On the
+            # response straight into the human's REAL session in state.db. On the
             # user's next live turn the agent re-reads that injected user message
             # as a standing instruction and "becomes" the curator, refusing the
             # actual task. _persist_disabled hard-stops every DB write/lazy-open
@@ -861,7 +861,7 @@ def _run_review_in_thread(
                 clear_thread_tool_whitelist()
 
             # Snapshot review actions before teardown. close() is allowed to
-            # clean per-session state, but the user-visible self-improvement
+            # clean per-session state, but the human-visible self-improvement
             # summary still needs the completed review agent's tool results.
             review_messages = list(getattr(review_agent, "_session_messages", []))
 
@@ -880,7 +880,7 @@ def _run_review_in_thread(
             review_agent = None
 
         # Scan the review agent's messages for successful tool actions
-        # and surface a compact summary to the user. Tool messages
+        # and surface a compact summary to the human. Tool messages
         # already present in messages_snapshot must be skipped, since
         # the review agent inherits that history and would otherwise
         # re-surface stale "created"/"updated" messages from the prior
