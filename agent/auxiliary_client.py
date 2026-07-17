@@ -905,7 +905,7 @@ class _CodexCompletionsAdapter:
         from agent.codex_responses_adapter import _chat_messages_to_responses_input
         from utils import base_url_host_matches
 
-        instructions = "You are Hermes."
+        instructions = "You are OotSim."
         replay_messages: List[Dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")

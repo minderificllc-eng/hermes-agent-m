@@ -1,11 +1,13 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Hermes Agent" width="100%">
+  <img src="assets/banner.png" alt="OotSim" width="100%">
 </p>
 
-# Hermes Agent ☤
+# OotSim — Oot Synthetic intelligence Mind
 <p align="center">
-  <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
+  <a href="https://hermes-agent.nousresearch.com/">OotSim</a> | <a href="https://hermes-agent.nousresearch.com/">OotSim Desktop</a>
 </p>
+
+<p align="center"><i>OotSim is a synthetic-intelligence project built on the Hermes Agent platform (by Nous Research). The runtime command is still <code>hermes</code> and install/config paths are unchanged; the rename to OotSim is being rolled out incrementally.</i></p>
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
