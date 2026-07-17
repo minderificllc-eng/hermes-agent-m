@@ -1196,12 +1196,8 @@ def run_doctor(args):
         check_warn(f"{_DHH}/SOUL.md not found", "(create it to give Hermes a custom personality)")
         if should_fix:
             soul_path.parent.mkdir(parents=True, exist_ok=True)
-            soul_path.write_text(
-                "# Hermes Agent Persona\n\n"
-                "<!-- Edit this file to customize how Hermes communicates. -->\n\n"
-                "You are Hermes, a helpful AI assistant.\n",
-                encoding="utf-8",
-            )
+            from hermes_cli.default_soul import DEFAULT_SOUL_MD
+            soul_path.write_text(DEFAULT_SOUL_MD + "\n", encoding="utf-8")
             check_ok(f"Created {_DHH}/SOUL.md with basic template")
             fixed_count += 1
     
