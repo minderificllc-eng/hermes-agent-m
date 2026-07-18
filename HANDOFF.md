@@ -178,17 +178,21 @@ framing understates deliberate divergence (child-env §2.3, model-caps
 §1.5 — both corrected in the doc). Treat the rest the same way: analyze
 per-site, bootstrap characterization coverage, migrate incrementally.
 
-1. **`CommandDef` dispatch (§1.4)** — `cli.py:8434 process_command`
-   (depth-79, 71-branch) + `gateway/run.py` (~52-branch). The ONE
-   mechanical mega-item (68/71 cli arms are one-liners), BUT ~50 of the
-   71 commands have NO `tests/cli/` coverage, so a dispatch-table
-   transcription error would ship silently. Correct sequence
-   (friction-unlock): write characterization tests covering all 71
-   commands FIRST, then convert each ladder to a per-class
-   `{canonical: method}` table (NOT shared handlers on the frozen
-   module-level `CommandDef` — cli/gateway handlers are sync-vs-async and
-   belong to different classes; the registry already gives both the
-   alias→canonical `resolve_command`).
+1. ✅ **`CommandDef` dispatch (§1.4) — COMPLETE (2026-07-17).** Both
+   ladders done. CLI: extracted the giant inline arm bodies into `_cmd_*`
+   methods, then converted the 71-branch elif chain to two tables
+   (`_slash_command_tables`: `returning` by method-name via getattr,
+   `delegates` as lambdas) — `process_command` went **663 lines / depth
+   79 → 43 lines / depth 1** (the codebase's worst function is now
+   trivial). Gateway: the 45 uniform `if canonical == X: return await
+   self._handle_X_command(event)` arms → `_GATEWAY_UNIFORM_COMMANDS` table
+   + one getattr dispatch; 7 special arms (new/start/learn/blueprint/undo/
+   steer/moa) stay explicit. Per-class tables (NOT shared handlers on the
+   frozen registry) because cli/gateway handlers are sync-vs-async on
+   different classes — confirmed the right call. `test_slash_dispatch_
+   tables.py` pins CLI coverage; brittle `getsource(_handle_message)`
+   command-literal tests repointed to the table. 9,752 cli + 9,181 gateway
+   tests green.
 2. **model-capabilities (§1.5)** — see the doc's ⚠️ note: the bare
    `"claude"` checks are context-specific (wire format / cache envelope /
    header route); a naive `is_anthropic_model()` causes silent 0%-cache
