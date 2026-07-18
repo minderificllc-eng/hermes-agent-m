@@ -90,45 +90,64 @@ All under `docs/`:
 
 ---
 
-## 3. OPEN WORK — refactoring Phase 1 (in progress when the session hung)
+## 3. OPEN WORK — refactoring (Phase 1 nearly done, 2026-07-17)
 
-Full plan + evidence in **`docs/refactoring-opportunities.md`**. We were
-**executing Phase 1** and had done the read/analysis but **made no edits yet**.
-Nothing is half-applied — the tree is clean.
+Full plan + evidence in **`docs/refactoring-opportunities.md`**.
 
-**Test harness is usable in this environment for the pure-Python targets:**
-`pip install pytest` works; `tools/threat_patterns.py` + its consumers
-(`cronjob_tools`, `skills_guard`, `skills_tool`, `mcp_tool`) import with
-stdlib only. **Baseline: `pytest tests/tools/test_threat_patterns.py
-tests/tools/test_skills_guard.py tests/tools/test_cron_prompt_injection.py` →
-126+12 pass.** Most of the rest of the codebase can't import here (missing
-`httpx` etc.) — browser/gateway changes need a full dep install to runtime-test.
+**Environment is now fully wired (2026-07-17):** pyenv 3.12.0 (repo-local
+`.python-version`, untracked — CI pins 3.11) + `uv sync --locked --extra all
+--extra dev` (CI's exact recipe) → `.venv` with the whole pinned dep tree.
+Run tests ONLY via `scripts/run_tests.sh <files>` — the suite assumes
+per-file isolation; batching multiple test files into one bare `pytest`
+process produces phantom cross-file failures.
 
-### Phase 1 queue (do in this order; each independently shippable)
-1. **Threat-pattern canonicalization + ReDoS drift fix** — see §4 bug (b). The
-   `tools/threat_patterns.py` tests give real coverage; do the drift fix here
-   first (fully verifiable), then consider the fuller 5-table fold. **Do NOT
-   big-bang merge `skills_guard.py`'s 118 severity-tagged patterns** — install
-   verdicts aren't covered test-per-verdict; that's a Phase-2 careful move.
-2. **`tools/browser_boundary.py`** — extract the byte-identical redaction walker
-   (`_redact_browser_output` == `_redact_cdp_output`) and the shared nav guard;
-   fixes §4 bug (a). Can't runtime-test here (no httpx) — rely on careful read +
-   `py_compile`, flag for full-env verification.
-3. Helper adoptions (truthy/truncation/atomic-write/`cfg_get`) — §"1.10" in the
-   refactor doc; shared helpers already exist and are under-used.
-4. `main()` subparser extraction — mechanical, continues an in-progress pattern.
-5. Context-file loader table (`prompt_builder.py`).
+**Full-suite baseline (first ever run, triaged 3-way in a pre-reframing
+worktree):** 48 failures / 23 files out of 2,041 files. (a) 5 assertions
+stale from the intentional reframing → fixed (`b258b6c7f`); (b) 4 files
+flaky only under 16-way parallel load (lsp e2e, service_manager,
+approved_command_clean_slate, local_interrupt_cleanup) — pass when run
+directly; (c) the rest (~15 files, incl. anthropic_adapter
+TestRunOauthSetupToken, state_db_malformed_repair, search_error_guard,
+gateway_service/wsl, live_system_guard) fail identically at the
+pre-reframing upstream commit on this platform — pre-existing, not ours.
+
+### Phase 1 — DONE (one fold per commit, tests green each time)
+1. ✅ `114d3554c` Cron ReDoS drift: canonical bounded `FILLER` export from
+   `threat_patterns`, both cron tables import it; `skills_guard`'s literal
+   `INVISIBLE_CHARS` copy collapsed to the canonical frozenset. NOTE: a real
+   ReDoS regression test needs the near-miss filler words to BE alternation
+   words ("ignore prior prior … notinstructions") — neutral filler backtracks
+   linearly and proves nothing.
+2. ✅ `ca27c7498` `tools/browser_boundary.py` (redaction walker +
+   `secret_in_url_error`). Closed the secret-in-URL gap on TWO sibling paths:
+   `camofox_navigate` (defense-in-depth; its only production call site was
+   already post-guard) and **CDP `Page.navigate`, which was a live bypass**.
+   The CDP check runs outside the guard's fail-open try/except.
+3. ✅ `414ae34bc` truthy/falsy fold (9 sites; added `FALSY_STRINGS`/
+   `is_falsy_value` for the default-on sites) · `23209a0a0` atomic-write
+   holdouts (anthropic_adapter creds, bitwarden installer).
+4. ✅ `3385a5dd3` AGENTS.md/CLAUDE.md twin loaders → `_load_first_named_md`.
+   (The fuller "loader table" was judged overreach: `_load_hermes_md` and
+   `_load_cursorrules` are structurally different; only the twins were dupes.)
+- **Skipped deliberately:** `truncate_middle` fold — the three
+  implementations share ~4 lines and their markers are model-visible
+  behavior (byte-stable per ground rules); a shared helper is ceremony.
+- **Remaining from Phase 1:** `main()` subparser extraction (item 4 —
+  mechanical, large diff, pattern already underway: 86 `build_*_parser`
+  refs). And the deferred §1.10 `get_setting`/`cfg_get` migration (44
+  sites, each needs a precedence audit).
 
 Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
-`run_conversation` 4,939-line split, model-capabilities table) are scoped in the
-doc with risk notes.
+`run_conversation` 4,939-line split, model-capabilities table) are scoped in
+the doc with risk notes. Threat-pattern 5-table full fold is Phase 2
+(skills_guard verdicts aren't covered test-per-verdict).
 
 ---
 
-## 4. SECURITY findings (surfaced by the refactor survey — fix these)
+## 4. SECURITY findings (surfaced by the refactor survey)
 
-Three real drift bugs, caused by copy-paste divergence. **These are the highest
-priority in Phase 1.**
+Bugs (a) and (b) below are **FIXED** (`ca27c7498`, `114d3554c` — see §3);
+(c) child-env scrub consolidation remains, Phase 2/3. Historical detail:
 
 **(a) Camofox navigation is missing the secret-in-URL exfil guard.**
 `tools/browser_tool.py:2705-2726` (`browser_navigate`) blocks URLs containing
@@ -165,12 +184,9 @@ export when doing bug (b).
 ## 5. cognee integration (DEFERRED to a new context, per the human)
 
 - `minderificllc-eng/cognee` is the human's **fork of `topoteretes/cognee`**
-  (the real third-party graph-memory codebase), so its actual `cognify`/`memify`
-  source can be read once accessible.
-- **BLOCKER:** `add_repo` and `list_repos` (the `claude-code-remote` MCP tools)
-  require **interactive approval that a non-interactive session cannot grant**.
-  To unblock: add the repo from an *interactive* Claude Code session (or approve
-  the connector), then `register_repo_root`, then read the source.
+  (the real third-party graph-memory codebase). **UNBLOCKED (2026-07-17): the
+  full source is checked out locally at `../cognee`** (sibling of OotSim in
+  the workspace) — read `cognify`/`memify` directly from there.
 - Recommended integration path (from the eval doc): pilot cognee behind Hermes's
   existing `MemoryProvider` interface (`plugins/memory/cognee/`, mirroring
   `retaindb`/`honcho`) before promoting a local self-graph. Borrow the *model*
@@ -185,15 +201,17 @@ export when doing bug (b).
 
 ## 6. Environment & verification notes for the next session
 
-- **Fresh clone; deps NOT installed.** Most modules can't import (missing
-  `httpx`, etc.). `pip install pytest` succeeds; pure-stdlib modules
-  (`threat_patterns` + consumers) test fine. For browser/gateway/agent runtime
-  changes, install the full dep tree first or they can't be exercised here.
-- **What was verified so far:** identity edits `py_compile` clean and the 5
-  copies are byte-identical; `threat_patterns`/`skills_guard`/cron tests green
-  (126+12). The prose reframing and OotSim rename were **not** run against a full
-  test suite (deps missing) — a full-env `pytest` pass is still owed before
-  treating them as verified.
+- **Deps ARE installed (2026-07-17).** pyenv 3.12.0 + `uv sync --locked
+  --python ~/.pyenv/versions/3.12.0/bin/python3 --extra all --extra dev`
+  → `.venv/` in the repo. The system `python3` is 3.9 — never use it (the
+  codebase needs ≥3.11); always `.venv/bin/python` or `scripts/run_tests.sh`.
+- **Run tests only via `scripts/run_tests.sh`** (per-file isolation).
+  Batching several test files into one bare `pytest` process yields phantom
+  failures (observed: 75 bogus failures that all pass isolated). Full suite
+  ≈ 90 min on this machine; per-file runs are seconds.
+- **Full-suite verification is DONE** — the reframing/rename are verified
+  (5 stale prose assertions fixed in `b258b6c7f`); remaining failures are
+  pre-existing upstream or parallel-load flakes (triage table in §3).
 - **Identity sync check** (run after any identity edit):
   ```python
   python - <<'PY'
@@ -214,13 +232,25 @@ export when doing bug (b).
 
 ## 7. Branch / git state
 
-- All prior work (7 commits) plus this handoff are on `main` as of this session.
-- Prior branch `claude/alignment-framing-audit-74k096` holds the same history.
-- No PR was opened (none was requested).
-- Nothing is half-applied; working tree was clean at handoff.
+- Everything is on `main`; no PR (none requested). Working tree clean.
+- 2026-07-17 session commits: `114d3554c` (cron ReDoS), `ca27c7498`
+  (browser_boundary), `414ae34bc` (truthy fold), `b258b6c7f` (stale test
+  assertions), `23209a0a0` (atomic writes), `3385a5dd3` (twin loaders),
+  plus this handoff update.
 
 ## 8. Suggested first action for the next session
-Start Phase 1 bug (b) — the cron ReDoS drift fix — it's the most verifiable
-(stdlib tests present) and a real security fix. Then bug (a) via
-`browser_boundary.py`. Keep one fold per commit; re-run the threat tests each
-time; install full deps before touching browser/gateway/agent runtime.
+
+Working style (per the human, 2026-07-17): **optimize for LLM development —
+no sprint/milestone ceremony.** The commit log is the process; one
+verifiable fold per commit; machine-checkable state (this file, the sync
+check, `scripts/run_tests.sh`) over narrative status.
+
+Next up, in leverage order:
+1. `hermes_cli/main.py` subparser extraction (Phase 1 item 4) — mechanical,
+   continues the existing `build_*_parser` pattern, lowest-risk big win.
+2. Phase 2 folds from `docs/refactoring-opportunities.md` §4: start with
+   `CapabilityRegistry[T]` (tests pin behavior).
+3. Decision confirmed by the human (2026-07-17): **refactor in place, no
+   rewrite** — new-build only for genuinely new subsystems (self-memory
+   graph vs `../cognee`, MoE later) against existing seams
+   (`MemoryProvider`).
