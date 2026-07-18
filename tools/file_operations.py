@@ -380,6 +380,16 @@ def _split_tool_diagnostics(output: str) -> tuple[str, str]:
         if stripped.startswith("rg: ") or stripped.startswith("grep: "):
             diagnostics.append(line)
             continue
+        # Older ripgrep (<= 12) emits per-file diagnostics WITHOUT the
+        # "rg: " prefix: "<path>: Permission denied (os error 13)". That
+        # shape passes the search-output regex (path + colon), so in
+        # files_only mode the diagnostic leaked in as a fake file path.
+        # Require exactly one colon before the message: a real content
+        # match has two ("<path>:<lineno>:<text>"), so a matched line that
+        # merely CONTAINS "(os error N)" text is not misclassified.
+        if _RG_BARE_DIAGNOSTIC_RE.match(stripped):
+            diagnostics.append(line)
+            continue
         # Otherwise classify by output shape. rg's regex-parse-error block
         # also emits an indented caret line and a trailing "error: ..." line
         # with no tool prefix; neither matches a search-output shape, so they
@@ -400,6 +410,11 @@ def _split_tool_diagnostics(output: str) -> tuple[str, str]:
 # match because the path token forbids whitespace and a leading tool prefix
 # like "rg" is followed by ": " (space) which the negated class rejects.
 _SEARCH_OUTPUT_RE = re.compile(r'^([A-Za-z]:)?[^\s:][^\n]*?[:\-]\d|^[^\s:][^\s]*$')
+
+# Bare per-file diagnostic from ripgrep <= 12 (no "rg: " prefix):
+# "<path>: Permission denied (os error 13)". One colon only — content
+# matches carry a second ":<lineno>:".
+_RG_BARE_DIAGNOSTIC_RE = re.compile(r'^[^:\n]+: [^:\n]*\(os error \d+\)$')
 
 
 def _parse_search_context_line(line: str) -> tuple[str, int, str] | None:
@@ -768,10 +783,19 @@ def _pattern_has_regex_newline(pattern: str) -> bool:
 
 
 def _is_line_oriented_newline_error(error: Optional[str]) -> bool:
-    """Return True for rg's hard error when multiline mode is required."""
+    """Return True for rg's hard error when multiline mode is required.
+
+    The quoting around the literal varies by ripgrep version — rg 13+ says
+    ``the literal "\\n" is not allowed`` while rg 12 wraps it again as
+    ``the literal '"\\n"' is not allowed`` — so match on the stable parts.
+    """
     if not error:
         return False
-    return "literal \"\\n\" is not allowed" in error and "--multiline" in error
+    return (
+        "is not allowed in a regex" in error
+        and "--multiline" in error
+        and "\\n" in error
+    )
 
 
 def _maybe_warn_line_oriented_newline_pattern(result: SearchResult, pattern: str) -> SearchResult:
