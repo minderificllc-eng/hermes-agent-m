@@ -1883,9 +1883,16 @@ def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str
         return ""
 
 
-def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """AGENTS.md — top-level only (no recursive walk)."""
-    for name in ["AGENTS.md", "agents.md"]:
+def _load_first_named_md(
+    cwd_path: Path,
+    names: tuple[str, ...],
+    label: str,
+    context_length: Optional[int] = None,
+) -> str:
+    """First existing, non-empty file among *names* in cwd — scanned,
+    ``## <name>``-wrapped, truncated. An empty or unreadable candidate falls
+    through to the next name."""
+    for name in names:
         candidate = cwd_path / name
         if candidate.exists():
             try:
@@ -1894,31 +1901,26 @@ def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str
                     content = _scan_context_content(content, name)
                     result = f"## {name}\n\n{content}"
                     return _truncate_content(
-                        result, "AGENTS.md", context_length=context_length,
+                        result, label, context_length=context_length,
                         read_path=str(candidate),
                     )
             except Exception as e:
                 logger.debug("Could not read %s: %s", candidate, e)
     return ""
+
+
+def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
+    """AGENTS.md — top-level only (no recursive walk)."""
+    return _load_first_named_md(
+        cwd_path, ("AGENTS.md", "agents.md"), "AGENTS.md", context_length,
+    )
 
 
 def _load_claude_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
     """CLAUDE.md / claude.md — cwd only."""
-    for name in ["CLAUDE.md", "claude.md"]:
-        candidate = cwd_path / name
-        if candidate.exists():
-            try:
-                content = candidate.read_text(encoding="utf-8").strip()
-                if content:
-                    content = _scan_context_content(content, name)
-                    result = f"## {name}\n\n{content}"
-                    return _truncate_content(
-                        result, "CLAUDE.md", context_length=context_length,
-                        read_path=str(candidate),
-                    )
-            except Exception as e:
-                logger.debug("Could not read %s: %s", candidate, e)
-    return ""
+    return _load_first_named_md(
+        cwd_path, ("CLAUDE.md", "claude.md"), "CLAUDE.md", context_length,
+    )
 
 
 def _load_cursorrules(cwd_path: Path, context_length: Optional[int] = None) -> str:
