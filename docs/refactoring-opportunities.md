@@ -223,11 +223,20 @@ incrementally.
   holdouts re-implement tempfile+replace (`anthropic_adapter.py:1168-1187`,
   `secret_sources/bitwarden.py:246-257`).
 - **Config access:** `cfg_get` exists (docstring: replaces a pattern appearing
-  "50+ times") but **36 raw `.get().get()` chains** remain in
-  gateway/+hermes_cli/, and the "env var OR config key" idiom is hand-written
-  **44×** with *inconsistent precedence* → add `get_setting(config, *path,
-  env=, default=)` and migrate site-by-site (each migration must confirm the
-  prior precedence).
+  "50+ times") but raw `.get().get()` chains remain in gateway/+hermes_cli/,
+  and the "env var OR config key" idiom is hand-written with *inconsistent
+  precedence*. **`get_setting(cfg, *keys, env=, default=, env_wins=)` ADDED
+  (2026-07-17)** — canonical resolver with explicit precedence, empty-env =
+  unset, and cfg_get falsy-preservation. ⚠️ **Migration is NOT uniform:** many
+  existing sites use `os.getenv(X) or cfg...`, which is FALSY-fallthrough
+  (empty/`0`/`False` falls through) — semantically different from
+  `get_setting`'s None-based presence check. Confirm each site's
+  falsy-vs-None intent before switching (a site relying on `or` to skip an
+  empty-string config value would break). `get_setting` is the canonical tool
+  for new code + careful opportunistic migration, not a blind find-replace.
+  The pure `.get("X",{}).get("Y")` chains that ARE config-only migrate to
+  `cfg_get` freely — but confirm each is config (not a tool-call/JSON dict;
+  several greps hit generic dict access, not config).
 - **Plugin-category loaders:** `plugins/{cron_providers,memory,context_engine}/
   __init__.py` share up to 50 duplicate blocks — one generic category loader.
 - **Per-tool schema/dispatch boilerplate:** `kanban_tools.py` shares 12-line
