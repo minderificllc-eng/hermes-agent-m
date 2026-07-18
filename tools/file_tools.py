@@ -636,6 +636,14 @@ _SENSITIVE_PATH_PREFIXES = (
     "/etc/", "/boot/", "/usr/lib/systemd/",
     "/private/etc/", "/private/var/",
 )
+# Carve-out from the prefix block above: macOS puts the PER-USER temp and
+# cache trees under /var/folders/<xx>/<id>/{T,C} (confstr DARWIN_USER_TEMP_DIR),
+# which resolves to /private/var/folders/... — user scratch space owned 0700
+# by the user, not system state. Without this exemption every write to
+# $TMPDIR on macOS is refused as a "sensitive system path".
+_SENSITIVE_PATH_EXEMPT_PREFIXES = (
+    "/private/var/folders/", "/var/folders/",
+)
 _SENSITIVE_EXACT_PATHS = {"/var/run/docker.sock", "/run/docker.sock"}
 
 _hermes_config_resolved: str | None = None
@@ -670,9 +678,13 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
         f"Refusing to write to sensitive system path: {filepath}\n"
         "Use the terminal tool with sudo if you need to modify system files."
     )
-    for prefix in _SENSITIVE_PATH_PREFIXES:
-        if resolved.startswith(prefix) or normalized.startswith(prefix):
-            return _err
+    # Exemption keys on the RESOLVED path only: a symlink planted under
+    # /var/folders pointing into /etc resolves to /etc/... and stays blocked.
+    exempt = resolved.startswith(_SENSITIVE_PATH_EXEMPT_PREFIXES)
+    if not exempt:
+        for prefix in _SENSITIVE_PATH_PREFIXES:
+            if resolved.startswith(prefix) or normalized.startswith(prefix):
+                return _err
     if resolved in _SENSITIVE_EXACT_PATHS or normalized in _SENSITIVE_EXACT_PATHS:
         return _err
     # Prevent agents from modifying the Hermes config file directly.
