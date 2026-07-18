@@ -142,9 +142,19 @@ pre-reframing upstream commit on this platform — pre-existing, not ours.
   exemption dead, SQLite repair broken under defensive mode, env
   snapshot TEAR from empty $BASHPID in bash 3.2, + test-infra gaps).
   Green now means green — treat any new failure as signal.
+- ✅ `CapabilityRegistry[T]` fold COMPLETE (2026-07-17): the six
+  ~90%-identical provider registries are thin modules over one generic
+  (`agent/capability_registry.py`). Real differences became knobs
+  (normalize/builtins, capability filter, fail-closed, no-single-
+  shortcut + local sentinel). Modules keep import surface, loggers, and
+  `_providers`/`_lock` aliases (tests mutate in place). 7,496
+  agent+plugins tests green. NOTE: `browser_registry._resolve` has no
+  production caller — `browser_tool._get_cloud_provider` still does its
+  own resolution; unifying that is a candidate follow-up.
 - Still deferred: §1.10 `get_setting`/`cfg_get` migration (44 sites,
-  each needs a precedence audit). Next fold up: `CapabilityRegistry[T]`
-  (docs/refactoring-opportunities.md §1.1).
+  each needs a precedence audit). Next fold up: `CommandDef` handler
+  dispatch — kill the twin command ladders (cli.py:8434 depth-79 +
+  gateway/run.py ~50-branch), §1.4.
 
 Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
 `run_conversation` 4,939-line split, model-capabilities table) are scoped in
