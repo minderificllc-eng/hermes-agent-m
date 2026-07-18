@@ -254,7 +254,10 @@ def install_bws(*, force: bool = False) -> Path:
             | stat.S_IRGRP | stat.S_IXGRP
             | stat.S_IROTH | stat.S_IXOTH,
         )
-        os.replace(staged, target)
+        # atomic_replace (not bare os.replace): preserves a symlinked target
+        # and falls back to copy/fsync on EXDEV/EBUSY (GitHub #16743).
+        from utils import atomic_replace
+        atomic_replace(staged, target)
 
     logger.info("Installed bws %s at %s", _BWS_VERSION, target)
     return target

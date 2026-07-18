@@ -15,8 +15,6 @@ import json
 import logging
 import os
 import platform
-import secrets
-import stat
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1162,35 +1160,14 @@ def _write_claude_code_credentials(
 
         existing["claudeAiOauth"] = oauth_data
 
-        cred_path.parent.mkdir(parents=True, exist_ok=True)
-        # Per-process random suffix avoids collisions between concurrent
-        # writers and stale leftovers from a prior crashed write.
-        _tmp_cred = cred_path.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-        try:
-            # Create the temp file atomically at 0o600. The previous
-            # write_text + post-replace chmod opened a TOCTOU window where
-            # both the temp file and the destination briefly inherited the
-            # process umask (commonly 0o644 = world-readable), exposing
-            # Claude Code OAuth tokens to other local users between create
-            # and chmod. Mirrors agent/google_oauth.py (#19673) and
-            # tools/mcp_oauth.py (#21148). Parent dir (~/.claude/) is
-            # owned by Claude Code itself, so we leave its mode alone.
-            fd = os.open(
-                str(_tmp_cred),
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                stat.S_IRUSR | stat.S_IWUSR,
-            )
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(existing, fh, indent=2)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(_tmp_cred, cred_path)
-        except OSError:
-            try:
-                _tmp_cred.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        # mode=0o600 keeps the token file owner-only from temp-file creation
+        # through the final replace — no umask/chmod TOCTOU window (mirrors
+        # agent/google_oauth.py #19673 and tools/mcp_oauth.py #21148). Parent
+        # dir (~/.claude/) is owned by Claude Code itself; its mode is left
+        # alone.
+        from utils import atomic_json_write
+
+        atomic_json_write(cred_path, existing, indent=2, mode=0o600)
     except (OSError, IOError) as e:
         logger.debug("Failed to write refreshed credentials: %s", e)
 
