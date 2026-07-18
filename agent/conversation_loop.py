@@ -574,6 +574,340 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
     return sp
 
 
+def _try_error_recovery(agent, classified, status_code, api_error, api_messages, messages, _retry):
+    """Run the one-shot API-error recovery arms in order.
+
+    Each arm gates on ``classified.reason`` (or provider/status for the auth
+    refreshes), sets its one-shot ``_retry`` flag, attempts the recovery, and
+    returns True when the caller should ``continue`` the retry loop
+    immediately. A False return falls through arm-by-arm and finally to the
+    normal retry/backoff path — exactly the original inline cascade, with
+    ``continue`` mapped to ``return True``. All mutations go through the
+    passed-in objects (agent, _retry, api_messages, messages); the arms bind
+    no loop-locals, verified before extraction.
+    """
+    # Image-too-large recovery: shrink oversized native image
+    # parts in-place and retry once.  Triggered by Anthropic's
+    # per-image 5 MB ceiling (400 with "image exceeds 5 MB
+    # maximum") or any other provider that complains about
+    # image size.  If shrink fails or a second attempt still
+    # fails, fall through to normal error handling.
+    if (
+        classified.reason == FailoverReason.image_too_large
+        and not _retry.image_shrink_retry_attempted
+    ):
+        _retry.image_shrink_retry_attempted = True
+        image_max_dimension = _image_error_max_dimension(api_error) or 8000
+        if agent._try_shrink_image_parts_in_messages(
+            api_messages,
+            max_dimension=image_max_dimension,
+        ):
+            agent._vprint(
+                f"{agent.log_prefix}📐 Image(s) exceeded provider size limit — "
+                f"shrank and retrying...",
+                force=True,
+            )
+            return True
+        else:
+            logger.info(
+                "image-shrink recovery: no data-URL image parts found "
+                "or shrink didn't reduce size; surfacing original error."
+            )
+
+    # Multimodal-tool-content recovery: providers that follow
+    # the OpenAI spec strictly (tool message content must be a
+    # string) reject our list-type content with a 400.  Strip
+    # image parts from any list-type tool messages, mark the
+    # (provider, model) as no-list-tool-content for the rest
+    # of this session so future tool results preemptively
+    # downgrade, and retry once.  See issue #27344.
+    if (
+        classified.reason == FailoverReason.multimodal_tool_content_unsupported
+        and not _retry.multimodal_tool_content_retry_attempted
+    ):
+        _retry.multimodal_tool_content_retry_attempted = True
+        if agent._try_strip_image_parts_from_tool_messages(api_messages):
+            agent._vprint(
+                f"{agent.log_prefix}📐 Provider rejected list-type tool content — "
+                f"downgraded screenshots to text and retrying...",
+                force=True,
+            )
+            return True
+        else:
+            logger.info(
+                "multimodal-tool-content recovery: no list-type tool "
+                "messages with image parts found; surfacing original error."
+            )
+
+    # Anthropic OAuth subscription rejected the 1M-context beta
+    # header ("long context beta is not yet available for this
+    # subscription"). Disable the beta for the rest of this
+    # session, rebuild the client, and retry once.  1M-capable
+    # subscriptions never hit this branch — they accept the
+    # beta and keep full 1M context.  See PR #17680 for the
+    # original report (we chose reactive recovery over the
+    # proposed unconditional omit so capable subscriptions
+    # don't silently lose the capability).
+    if (
+        classified.reason == FailoverReason.oauth_long_context_beta_forbidden
+        and agent.api_mode == "anthropic_messages"
+        and agent._is_anthropic_oauth
+        and not _retry.oauth_1m_beta_retry_attempted
+    ):
+        _retry.oauth_1m_beta_retry_attempted = True
+        if not getattr(agent, "_oauth_1m_beta_disabled", False):
+            agent._oauth_1m_beta_disabled = True
+            try:
+                agent._anthropic_client.close()
+            except Exception:
+                pass
+            agent._rebuild_anthropic_client()
+            agent._vprint(
+                f"{agent.log_prefix}🔕 OAuth subscription doesn't support "
+                f"the 1M-context beta — disabled for this session and retrying...",
+                force=True,
+            )
+            return True
+
+    if (
+        agent.api_mode == "codex_responses"
+        and agent.provider in {"openai-codex", "xai-oauth"}
+        and status_code == 401
+        and not _retry.codex_auth_retry_attempted
+    ):
+        _retry.codex_auth_retry_attempted = True
+        if agent._try_refresh_codex_client_credentials(force=True):
+            _label = "xAI OAuth" if agent.provider == "xai-oauth" else "Codex"
+            agent._buffer_vprint(f"🔐 {_label} auth refreshed after 401. Retrying request...")
+            return True
+    if (
+        agent.api_mode == "chat_completions"
+        and agent.provider == "vertex"
+        and status_code == 401
+        and not _retry.vertex_auth_retry_attempted
+    ):
+        _retry.vertex_auth_retry_attempted = True
+        if agent._try_refresh_vertex_client_credentials():
+            agent._buffer_vprint("🔐 Vertex AI token refreshed after 401. Retrying request...")
+            return True
+    if (
+        agent.api_mode == "chat_completions"
+        and agent.provider == "nous"
+        and status_code == 401
+        and not _retry.nous_auth_retry_attempted
+    ):
+        _retry.nous_auth_retry_attempted = True
+        if agent._try_refresh_nous_client_credentials(force=True):
+            print(f"{agent.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request...")
+            return True
+        # Credential refresh didn't help — show diagnostic info.
+        # Most common causes: Portal OAuth expired/revoked,
+        # account out of credits, or agent key blocked.
+        from hermes_constants import display_hermes_home as _dhh_fn
+        _dhh = _dhh_fn()
+        _body_text = ""
+        try:
+            _body = getattr(api_error, "body", None) or getattr(api_error, "response", None)
+            if _body is not None:
+                _body_text = str(_body)[:200]
+        except Exception:
+            pass
+        print(f"{agent.log_prefix}🔐 Nous 401 — Portal authentication failed.")
+        if _body_text:
+            print(f"{agent.log_prefix}   Response: {_body_text}")
+        if not _print_nous_entitlement_guidance(agent, "Nous model access"):
+            print(f"{agent.log_prefix}   Most likely: Portal OAuth expired, account out of credits, or agent key revoked.")
+        print(f"{agent.log_prefix}   Troubleshooting:")
+        print(f"{agent.log_prefix}     • Re-authenticate: hermes auth add nous")
+        print(f"{agent.log_prefix}     • Check credits / billing: https://portal.nousresearch.com")
+        print(f"{agent.log_prefix}     • Verify stored credentials: {_dhh}/auth.json")
+        print(f"{agent.log_prefix}     • Switch providers temporarily: /model <model> --provider openrouter")
+    if (
+        agent.provider == "copilot"
+        and status_code == 401
+        and not _retry.copilot_auth_retry_attempted
+    ):
+        _retry.copilot_auth_retry_attempted = True
+        if agent._try_refresh_copilot_client_credentials():
+            agent._buffer_vprint("🔐 Copilot credentials refreshed after 401. Retrying request...")
+            return True
+    if (
+        agent.api_mode == "anthropic_messages"
+        and status_code == 401
+        and hasattr(agent, '_anthropic_api_key')
+        and not _retry.anthropic_auth_retry_attempted
+    ):
+        _retry.anthropic_auth_retry_attempted = True
+        from agent.anthropic_adapter import _is_oauth_token
+        from agent.azure_identity_adapter import is_token_provider
+        if agent._try_refresh_anthropic_client_credentials():
+            print(f"{agent.log_prefix}🔐 Anthropic credentials refreshed after 401. Retrying request...")
+            return True
+        # Credential refresh didn't help — show diagnostic info
+        key = agent._anthropic_api_key
+        print(f"{agent.log_prefix}🔐 Anthropic 401 — authentication failed.")
+        if is_token_provider(key):
+            # Azure Foundry Entra ID — the bearer token is
+            # minted per-request by an httpx event hook on a
+            # custom http_client passed to the SDK. The 401
+            # means Azure rejected the JWT (RBAC role missing,
+            # az login expired, IMDS unreachable, etc.).
+            print(f"{agent.log_prefix}   Auth method: Microsoft Entra ID (httpx event hook)")
+            print(f"{agent.log_prefix}   Run `hermes doctor` for credential-chain diagnostics, or")
+            print(f"{agent.log_prefix}   `az login` if your developer session expired.")
+        else:
+            auth_method = "Bearer (OAuth/setup-token)" if _is_oauth_token(key) else "x-api-key (API key)"
+            print(f"{agent.log_prefix}   Auth method: {auth_method}")
+            print(f"{agent.log_prefix}   Token prefix: {key[:12]}..." if isinstance(key, str) and len(key) > 12 else f"{agent.log_prefix}   Token: (empty or short)")
+        print(f"{agent.log_prefix}   Troubleshooting:")
+        from hermes_constants import display_hermes_home as _dhh_fn
+        _dhh = _dhh_fn()
+        print(f"{agent.log_prefix}     • Check ANTHROPIC_TOKEN in {_dhh}/.env for Hermes-managed OAuth/setup tokens")
+        print(f"{agent.log_prefix}     • Check ANTHROPIC_API_KEY in {_dhh}/.env for API keys or legacy token values")
+        print(f"{agent.log_prefix}     • For API keys: verify at https://platform.claude.com/settings/keys")
+        print(f"{agent.log_prefix}     • For Claude Code: run 'claude /login' to refresh, then retry")
+        print(f"{agent.log_prefix}     • Legacy cleanup: hermes config set ANTHROPIC_TOKEN \"\"")
+        print(f"{agent.log_prefix}     • Clear stale keys: hermes config set ANTHROPIC_API_KEY \"\"")
+
+    # Thinking block signature recovery.
+    #
+    # Anthropic signs thinking blocks against the full turn
+    # content. Any upstream mutation (context compression,
+    # session truncation, message merging) invalidates the
+    # signature and the API replies HTTP 400 ("invalid
+    # signature" or "cannot be modified"). Recovery strips
+    # ``reasoning_details`` so the retry sends no thinking
+    # blocks at all. One-shot per outer loop.
+    #
+    # The strip targets ``api_messages``, which is the
+    # API-call-time list that ``_build_api_kwargs`` consumes
+    # on every retry. ``api_messages`` was populated once at
+    # the start of the turn from shallow copies of
+    # ``messages``, so mutating it does not touch the
+    # canonical store. The previous implementation popped
+    # ``reasoning_details`` from ``messages`` instead, which
+    # had two problems: ``api_messages`` carried its own
+    # reference to the field through the shallow copy, so the
+    # retry's wire payload still included thinking blocks and
+    # the recovery never reached the API; and the mutation
+    # persisted into ``state.db`` through any subsequent
+    # ``_persist_session`` call, permanently corrupting the
+    # conversation. Future turns would replay the stripped
+    # state, hit the same 400, and the agent would terminate
+    # with ``max_retries_exhausted``, often spawning
+    # cascading compaction-ended sessions chained off the
+    # corrupted parent.
+    if (
+        classified.reason == FailoverReason.thinking_signature
+        and not _retry.thinking_sig_retry_attempted
+    ):
+        _retry.thinking_sig_retry_attempted = True
+        _api_stripped = 0
+        for _m in api_messages:
+            if isinstance(_m, dict) and "reasoning_details" in _m:
+                _m.pop("reasoning_details", None)
+                _api_stripped += 1
+        agent._vprint(
+            f"{agent.log_prefix}⚠️  Thinking block signature invalid, "
+            f"stripped reasoning_details from api_messages for retry...",
+            force=True,
+        )
+        logger.warning(
+            "%sThinking block signature recovery: stripped "
+            "reasoning_details from %d api_messages "
+            "(canonical messages unchanged)",
+            agent.log_prefix, _api_stripped,
+        )
+        return True
+
+    # ── Invalid encrypted reasoning replay recovery ───────
+    # OpenAI Responses API surfaces (and some compatible relays)
+    # return HTTP 400 ``invalid_encrypted_content`` when a
+    # replayed ``codex_reasoning_items`` blob from a previous
+    # turn fails verification (provider rotated the encryption
+    # key, the route doesn't actually persist reasoning state,
+    # etc.).  Recovery: disable replay for the rest of the
+    # session, strip cached items from history, retry once.
+    # One-shot — if a second 400 fires we fall through to the
+    # normal retry/backoff path.  Only fires for codex_responses
+    # mode with at least one assistant message that has cached
+    # ``codex_reasoning_items``; without replay state, the
+    # error is unrelated to our cache so the normal retry path
+    # handles it (the provider is rejecting something else).
+    if (
+        classified.reason == FailoverReason.invalid_encrypted_content
+        and not _retry.invalid_encrypted_content_retry_attempted
+        and agent.api_mode == "codex_responses"
+        and bool(getattr(agent, "_codex_reasoning_replay_enabled", True))
+        and any(
+            isinstance(_m, dict)
+            and _m.get("role") == "assistant"
+            and isinstance(_m.get("codex_reasoning_items"), list)
+            and _m.get("codex_reasoning_items")
+            for _m in messages
+        )
+    ):
+        _retry.invalid_encrypted_content_retry_attempted = True
+        replay_stats = agent._disable_codex_reasoning_replay(messages)
+        agent._vprint(
+            f"{agent.log_prefix}⚠️  Encrypted reasoning replay was rejected by the provider — "
+            f"disabled replay and stripped {replay_stats['items']} item(s) from "
+            f"{replay_stats['messages']} message(s), retrying...",
+            force=True,
+        )
+        logger.warning(
+            "%sInvalid encrypted reasoning recovery: disabled replay and stripped %d items from %d messages",
+            agent.log_prefix,
+            replay_stats["items"],
+            replay_stats["messages"],
+        )
+        return True
+
+    # ── llama.cpp grammar-parse recovery ──────────────────
+    # llama.cpp's ``json-schema-to-grammar`` converter rejects
+    # regex escape classes (``\d``, ``\w``, ``\s``) and most
+    # ``format`` values in tool schemas.  MCP servers emit
+    # these routinely for date/phone/email params.  Recovery:
+    # strip ``pattern``/``format`` from ``agent.tools`` and
+    # retry once.  We keep the keywords by default so cloud
+    # providers get the full prompting hints; this branch
+    # fires only for users on llama.cpp's OAI server.
+    if (
+        classified.reason == FailoverReason.llama_cpp_grammar_pattern
+        and not _retry.llama_cpp_grammar_retry_attempted
+    ):
+        _retry.llama_cpp_grammar_retry_attempted = True
+        try:
+            from tools.schema_sanitizer import strip_pattern_and_format
+            _, _stripped = strip_pattern_and_format(agent.tools)
+        except Exception as _strip_exc:  # pragma: no cover — defensive
+            logger.warning(
+                "%sllama.cpp grammar recovery: strip helper failed: %s",
+                agent.log_prefix, _strip_exc,
+            )
+            _stripped = 0
+        if _stripped:
+            agent._vprint(
+                f"{agent.log_prefix}⚠️  llama.cpp rejected tool schema grammar — "
+                f"stripped {_stripped} pattern/format keyword(s), retrying...",
+                force=True,
+            )
+            logger.warning(
+                "%sllama.cpp grammar recovery: stripped %d "
+                "pattern/format keyword(s) from tool schemas",
+                agent.log_prefix, _stripped,
+            )
+            return True
+        # No keywords found to strip — fall through to normal
+        # retry path rather than loop forever on the same error.
+        logger.warning(
+            "%sllama.cpp grammar error but no pattern/format "
+            "keywords to strip — falling through to normal retry",
+            agent.log_prefix,
+        )
+    return False
+
+
 def run_conversation(
     agent,
     user_message: Any,
@@ -2664,325 +2998,14 @@ def run_conversation(
                 if recovered_with_pool:
                     continue
 
-                # Image-too-large recovery: shrink oversized native image
-                # parts in-place and retry once.  Triggered by Anthropic's
-                # per-image 5 MB ceiling (400 with "image exceeds 5 MB
-                # maximum") or any other provider that complains about
-                # image size.  If shrink fails or a second attempt still
-                # fails, fall through to normal error handling.
-                if (
-                    classified.reason == FailoverReason.image_too_large
-                    and not _retry.image_shrink_retry_attempted
+                # ── Structured error recovery (strategy arms) ─────────
+                # The one-shot recovery cascade lives in _try_error_recovery;
+                # True = a recovery was applied, retry the API call now.
+                if _try_error_recovery(
+                    agent, classified, status_code, api_error,
+                    api_messages, messages, _retry,
                 ):
-                    _retry.image_shrink_retry_attempted = True
-                    image_max_dimension = _image_error_max_dimension(api_error) or 8000
-                    if agent._try_shrink_image_parts_in_messages(
-                        api_messages,
-                        max_dimension=image_max_dimension,
-                    ):
-                        agent._vprint(
-                            f"{agent.log_prefix}📐 Image(s) exceeded provider size limit — "
-                            f"shrank and retrying...",
-                            force=True,
-                        )
-                        continue
-                    else:
-                        logger.info(
-                            "image-shrink recovery: no data-URL image parts found "
-                            "or shrink didn't reduce size; surfacing original error."
-                        )
-
-                # Multimodal-tool-content recovery: providers that follow
-                # the OpenAI spec strictly (tool message content must be a
-                # string) reject our list-type content with a 400.  Strip
-                # image parts from any list-type tool messages, mark the
-                # (provider, model) as no-list-tool-content for the rest
-                # of this session so future tool results preemptively
-                # downgrade, and retry once.  See issue #27344.
-                if (
-                    classified.reason == FailoverReason.multimodal_tool_content_unsupported
-                    and not _retry.multimodal_tool_content_retry_attempted
-                ):
-                    _retry.multimodal_tool_content_retry_attempted = True
-                    if agent._try_strip_image_parts_from_tool_messages(api_messages):
-                        agent._vprint(
-                            f"{agent.log_prefix}📐 Provider rejected list-type tool content — "
-                            f"downgraded screenshots to text and retrying...",
-                            force=True,
-                        )
-                        continue
-                    else:
-                        logger.info(
-                            "multimodal-tool-content recovery: no list-type tool "
-                            "messages with image parts found; surfacing original error."
-                        )
-
-                # Anthropic OAuth subscription rejected the 1M-context beta
-                # header ("long context beta is not yet available for this
-                # subscription"). Disable the beta for the rest of this
-                # session, rebuild the client, and retry once.  1M-capable
-                # subscriptions never hit this branch — they accept the
-                # beta and keep full 1M context.  See PR #17680 for the
-                # original report (we chose reactive recovery over the
-                # proposed unconditional omit so capable subscriptions
-                # don't silently lose the capability).
-                if (
-                    classified.reason == FailoverReason.oauth_long_context_beta_forbidden
-                    and agent.api_mode == "anthropic_messages"
-                    and agent._is_anthropic_oauth
-                    and not _retry.oauth_1m_beta_retry_attempted
-                ):
-                    _retry.oauth_1m_beta_retry_attempted = True
-                    if not getattr(agent, "_oauth_1m_beta_disabled", False):
-                        agent._oauth_1m_beta_disabled = True
-                        try:
-                            agent._anthropic_client.close()
-                        except Exception:
-                            pass
-                        agent._rebuild_anthropic_client()
-                        agent._vprint(
-                            f"{agent.log_prefix}🔕 OAuth subscription doesn't support "
-                            f"the 1M-context beta — disabled for this session and retrying...",
-                            force=True,
-                        )
-                        continue
-
-                if (
-                    agent.api_mode == "codex_responses"
-                    and agent.provider in {"openai-codex", "xai-oauth"}
-                    and status_code == 401
-                    and not _retry.codex_auth_retry_attempted
-                ):
-                    _retry.codex_auth_retry_attempted = True
-                    if agent._try_refresh_codex_client_credentials(force=True):
-                        _label = "xAI OAuth" if agent.provider == "xai-oauth" else "Codex"
-                        agent._buffer_vprint(f"🔐 {_label} auth refreshed after 401. Retrying request...")
-                        continue
-                if (
-                    agent.api_mode == "chat_completions"
-                    and agent.provider == "vertex"
-                    and status_code == 401
-                    and not _retry.vertex_auth_retry_attempted
-                ):
-                    _retry.vertex_auth_retry_attempted = True
-                    if agent._try_refresh_vertex_client_credentials():
-                        agent._buffer_vprint("🔐 Vertex AI token refreshed after 401. Retrying request...")
-                        continue
-                if (
-                    agent.api_mode == "chat_completions"
-                    and agent.provider == "nous"
-                    and status_code == 401
-                    and not _retry.nous_auth_retry_attempted
-                ):
-                    _retry.nous_auth_retry_attempted = True
-                    if agent._try_refresh_nous_client_credentials(force=True):
-                        print(f"{agent.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request...")
-                        continue
-                    # Credential refresh didn't help — show diagnostic info.
-                    # Most common causes: Portal OAuth expired/revoked,
-                    # account out of credits, or agent key blocked.
-                    from hermes_constants import display_hermes_home as _dhh_fn
-                    _dhh = _dhh_fn()
-                    _body_text = ""
-                    try:
-                        _body = getattr(api_error, "body", None) or getattr(api_error, "response", None)
-                        if _body is not None:
-                            _body_text = str(_body)[:200]
-                    except Exception:
-                        pass
-                    print(f"{agent.log_prefix}🔐 Nous 401 — Portal authentication failed.")
-                    if _body_text:
-                        print(f"{agent.log_prefix}   Response: {_body_text}")
-                    if not _print_nous_entitlement_guidance(agent, "Nous model access"):
-                        print(f"{agent.log_prefix}   Most likely: Portal OAuth expired, account out of credits, or agent key revoked.")
-                    print(f"{agent.log_prefix}   Troubleshooting:")
-                    print(f"{agent.log_prefix}     • Re-authenticate: hermes auth add nous")
-                    print(f"{agent.log_prefix}     • Check credits / billing: https://portal.nousresearch.com")
-                    print(f"{agent.log_prefix}     • Verify stored credentials: {_dhh}/auth.json")
-                    print(f"{agent.log_prefix}     • Switch providers temporarily: /model <model> --provider openrouter")
-                if (
-                    agent.provider == "copilot"
-                    and status_code == 401
-                    and not _retry.copilot_auth_retry_attempted
-                ):
-                    _retry.copilot_auth_retry_attempted = True
-                    if agent._try_refresh_copilot_client_credentials():
-                        agent._buffer_vprint("🔐 Copilot credentials refreshed after 401. Retrying request...")
-                        continue
-                if (
-                    agent.api_mode == "anthropic_messages"
-                    and status_code == 401
-                    and hasattr(agent, '_anthropic_api_key')
-                    and not _retry.anthropic_auth_retry_attempted
-                ):
-                    _retry.anthropic_auth_retry_attempted = True
-                    from agent.anthropic_adapter import _is_oauth_token
-                    from agent.azure_identity_adapter import is_token_provider
-                    if agent._try_refresh_anthropic_client_credentials():
-                        print(f"{agent.log_prefix}🔐 Anthropic credentials refreshed after 401. Retrying request...")
-                        continue
-                    # Credential refresh didn't help — show diagnostic info
-                    key = agent._anthropic_api_key
-                    print(f"{agent.log_prefix}🔐 Anthropic 401 — authentication failed.")
-                    if is_token_provider(key):
-                        # Azure Foundry Entra ID — the bearer token is
-                        # minted per-request by an httpx event hook on a
-                        # custom http_client passed to the SDK. The 401
-                        # means Azure rejected the JWT (RBAC role missing,
-                        # az login expired, IMDS unreachable, etc.).
-                        print(f"{agent.log_prefix}   Auth method: Microsoft Entra ID (httpx event hook)")
-                        print(f"{agent.log_prefix}   Run `hermes doctor` for credential-chain diagnostics, or")
-                        print(f"{agent.log_prefix}   `az login` if your developer session expired.")
-                    else:
-                        auth_method = "Bearer (OAuth/setup-token)" if _is_oauth_token(key) else "x-api-key (API key)"
-                        print(f"{agent.log_prefix}   Auth method: {auth_method}")
-                        print(f"{agent.log_prefix}   Token prefix: {key[:12]}..." if isinstance(key, str) and len(key) > 12 else f"{agent.log_prefix}   Token: (empty or short)")
-                    print(f"{agent.log_prefix}   Troubleshooting:")
-                    from hermes_constants import display_hermes_home as _dhh_fn
-                    _dhh = _dhh_fn()
-                    print(f"{agent.log_prefix}     • Check ANTHROPIC_TOKEN in {_dhh}/.env for Hermes-managed OAuth/setup tokens")
-                    print(f"{agent.log_prefix}     • Check ANTHROPIC_API_KEY in {_dhh}/.env for API keys or legacy token values")
-                    print(f"{agent.log_prefix}     • For API keys: verify at https://platform.claude.com/settings/keys")
-                    print(f"{agent.log_prefix}     • For Claude Code: run 'claude /login' to refresh, then retry")
-                    print(f"{agent.log_prefix}     • Legacy cleanup: hermes config set ANTHROPIC_TOKEN \"\"")
-                    print(f"{agent.log_prefix}     • Clear stale keys: hermes config set ANTHROPIC_API_KEY \"\"")
-
-                # Thinking block signature recovery.
-                #
-                # Anthropic signs thinking blocks against the full turn
-                # content. Any upstream mutation (context compression,
-                # session truncation, message merging) invalidates the
-                # signature and the API replies HTTP 400 ("invalid
-                # signature" or "cannot be modified"). Recovery strips
-                # ``reasoning_details`` so the retry sends no thinking
-                # blocks at all. One-shot per outer loop.
-                #
-                # The strip targets ``api_messages``, which is the
-                # API-call-time list that ``_build_api_kwargs`` consumes
-                # on every retry. ``api_messages`` was populated once at
-                # the start of the turn from shallow copies of
-                # ``messages``, so mutating it does not touch the
-                # canonical store. The previous implementation popped
-                # ``reasoning_details`` from ``messages`` instead, which
-                # had two problems: ``api_messages`` carried its own
-                # reference to the field through the shallow copy, so the
-                # retry's wire payload still included thinking blocks and
-                # the recovery never reached the API; and the mutation
-                # persisted into ``state.db`` through any subsequent
-                # ``_persist_session`` call, permanently corrupting the
-                # conversation. Future turns would replay the stripped
-                # state, hit the same 400, and the agent would terminate
-                # with ``max_retries_exhausted``, often spawning
-                # cascading compaction-ended sessions chained off the
-                # corrupted parent.
-                if (
-                    classified.reason == FailoverReason.thinking_signature
-                    and not _retry.thinking_sig_retry_attempted
-                ):
-                    _retry.thinking_sig_retry_attempted = True
-                    _api_stripped = 0
-                    for _m in api_messages:
-                        if isinstance(_m, dict) and "reasoning_details" in _m:
-                            _m.pop("reasoning_details", None)
-                            _api_stripped += 1
-                    agent._vprint(
-                        f"{agent.log_prefix}⚠️  Thinking block signature invalid, "
-                        f"stripped reasoning_details from api_messages for retry...",
-                        force=True,
-                    )
-                    logger.warning(
-                        "%sThinking block signature recovery: stripped "
-                        "reasoning_details from %d api_messages "
-                        "(canonical messages unchanged)",
-                        agent.log_prefix, _api_stripped,
-                    )
                     continue
-
-                # ── Invalid encrypted reasoning replay recovery ───────
-                # OpenAI Responses API surfaces (and some compatible relays)
-                # return HTTP 400 ``invalid_encrypted_content`` when a
-                # replayed ``codex_reasoning_items`` blob from a previous
-                # turn fails verification (provider rotated the encryption
-                # key, the route doesn't actually persist reasoning state,
-                # etc.).  Recovery: disable replay for the rest of the
-                # session, strip cached items from history, retry once.
-                # One-shot — if a second 400 fires we fall through to the
-                # normal retry/backoff path.  Only fires for codex_responses
-                # mode with at least one assistant message that has cached
-                # ``codex_reasoning_items``; without replay state, the
-                # error is unrelated to our cache so the normal retry path
-                # handles it (the provider is rejecting something else).
-                if (
-                    classified.reason == FailoverReason.invalid_encrypted_content
-                    and not _retry.invalid_encrypted_content_retry_attempted
-                    and agent.api_mode == "codex_responses"
-                    and bool(getattr(agent, "_codex_reasoning_replay_enabled", True))
-                    and any(
-                        isinstance(_m, dict)
-                        and _m.get("role") == "assistant"
-                        and isinstance(_m.get("codex_reasoning_items"), list)
-                        and _m.get("codex_reasoning_items")
-                        for _m in messages
-                    )
-                ):
-                    _retry.invalid_encrypted_content_retry_attempted = True
-                    replay_stats = agent._disable_codex_reasoning_replay(messages)
-                    agent._vprint(
-                        f"{agent.log_prefix}⚠️  Encrypted reasoning replay was rejected by the provider — "
-                        f"disabled replay and stripped {replay_stats['items']} item(s) from "
-                        f"{replay_stats['messages']} message(s), retrying...",
-                        force=True,
-                    )
-                    logger.warning(
-                        "%sInvalid encrypted reasoning recovery: disabled replay and stripped %d items from %d messages",
-                        agent.log_prefix,
-                        replay_stats["items"],
-                        replay_stats["messages"],
-                    )
-                    continue
-
-                # ── llama.cpp grammar-parse recovery ──────────────────
-                # llama.cpp's ``json-schema-to-grammar`` converter rejects
-                # regex escape classes (``\d``, ``\w``, ``\s``) and most
-                # ``format`` values in tool schemas.  MCP servers emit
-                # these routinely for date/phone/email params.  Recovery:
-                # strip ``pattern``/``format`` from ``agent.tools`` and
-                # retry once.  We keep the keywords by default so cloud
-                # providers get the full prompting hints; this branch
-                # fires only for users on llama.cpp's OAI server.
-                if (
-                    classified.reason == FailoverReason.llama_cpp_grammar_pattern
-                    and not _retry.llama_cpp_grammar_retry_attempted
-                ):
-                    _retry.llama_cpp_grammar_retry_attempted = True
-                    try:
-                        from tools.schema_sanitizer import strip_pattern_and_format
-                        _, _stripped = strip_pattern_and_format(agent.tools)
-                    except Exception as _strip_exc:  # pragma: no cover — defensive
-                        logger.warning(
-                            "%sllama.cpp grammar recovery: strip helper failed: %s",
-                            agent.log_prefix, _strip_exc,
-                        )
-                        _stripped = 0
-                    if _stripped:
-                        agent._vprint(
-                            f"{agent.log_prefix}⚠️  llama.cpp rejected tool schema grammar — "
-                            f"stripped {_stripped} pattern/format keyword(s), retrying...",
-                            force=True,
-                        )
-                        logger.warning(
-                            "%sllama.cpp grammar recovery: stripped %d "
-                            "pattern/format keyword(s) from tool schemas",
-                            agent.log_prefix, _stripped,
-                        )
-                        continue
-                    # No keywords found to strip — fall through to normal
-                    # retry path rather than loop forever on the same error.
-                    logger.warning(
-                        "%sllama.cpp grammar error but no pattern/format "
-                        "keywords to strip — falling through to normal retry",
-                        agent.log_prefix,
-                    )
 
                 retry_count += 1
                 elapsed_time = time.time() - api_start_time
