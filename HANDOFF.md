@@ -94,8 +94,10 @@ All under `docs/`:
 
 Full plan + evidence in **`docs/refactoring-opportunities.md`** (now
 annotated in place with what shipped and which folds were deliberately NOT
-done and why). Everything below is done except `run_conversation` steps
-(b)/(c) — see §8 for the go-forward list.
+done and why). ALL mega-items are now resolved — including the
+`run_conversation` three-step split (see item 3 below). What remains is
+only the optional low-value backlog listed at the end of this section and
+the opportunistic helper adoptions in §8.
 
 **Environment is now fully wired (2026-07-17):** pyenv 3.12.0 (repo-local
 `.python-version`, untracked — CI pins 3.11) + `uv sync --locked --extra all
@@ -210,26 +212,25 @@ per-site, bootstrap characterization coverage, migrate incrementally.
    cache hits / re-bills every turn. This is a design fact, not incomplete
    work — see the doc §1.5 ⚠️ note and `model_capabilities.py`'s SCOPE
    docstring.
-3. ✅/⬜ **`run_conversation` split (§3)** — hottest path, 3 ordered steps:
+3. ✅ **`run_conversation` split (§3) — COMPLETE (2026-07-17), all 3 steps:**
    - ✅ (a) `_finalize_turn()` DONE: all 23 exits through one helper;
      `**extra` preserves each exit's EXACT key set (AST-verified). NOTE:
      the 23 dicts share 4 core keys but vary in flags, so the helper
      spreads `**extra`, NOT a normalized superset.
-   - ⬜ (b) extract the ~3.5k-line inner retry-loop into a `TurnAttempt`
-     object owning its counters (`compression_attempts` etc. reset in ≥8
-     places) → `{outcome: ok|retry|compress|rotate|abort}`.
-   - ⬜ (c) strategy table on `classified.reason` replacing the recovery
-     cascade (`:2514-2986`). **Investigated 2026-07-17:** the cascade arms
-     are substantial distinct recovery *procedures* (image-shrink,
-     multimodal-strip, thinking-signature-strip, invalid-encrypted-replay,
-     llama-grammar-strip, oauth-beta), each nested 16+ spaces deep and
-     mutating heavily-shared loop state (`messages`, `api_messages`, the
-     `_retry` flag object) then `continue`-ing — NOT a flat elif ladder
-     like the cli one that folded cleanly. Extraction needs each arm's full
-     read/write closure captured faithfully; a missed loop-local = a silent
-     recovery regression that only fires on a specific provider error (hard
-     for the suite to catch). This is the plan's single highest-care item;
-     do it dedicated, one arm at a time, with a provider-error repro per arm.
+   - ✅ (b) resolved as ALREADY-DONE + DOCUMENTED-REJECTED remainder: the
+     "TurnAttempt object" exists as `TurnRetryState` (upstream refactor,
+     ~16 one-shot guards); its docstring deliberately keeps loop-control
+     counters as locals. Deeper: `compression_attempts` is TURN-lifetime
+     while `TurnRetryState` is PER-ATTEMPT — the audit's proposed move
+     would reset the counter every API call and cause infinite compression
+     loops on persistent 413s. Trap #6; see doc §3 table entry.
+   - ✅ (c) DONE: `_try_error_recovery()` — the 12 one-shot recovery arms
+     (image-shrink, multimodal-strip, oauth-1M-beta, five 401 credential
+     refreshes with diagnostics, thinking-signature, invalid-encrypted,
+     llama-grammar) extracted verbatim, `continue`↔`return True` 1:1
+     audited (inner for-loops contain no continue), ordering preserved.
+     run_conversation: 4,911 → 4,421 lines. Per-arm behavioral tests +
+     full agent/ + run_agent/ (7,689) green.
 
 - ⬜ **§1.10 remaining migration:** the `get_setting` HELPER is DONE (added
   + tested). The per-site adoption is NOT uniform — many sites use
