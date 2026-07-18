@@ -12,10 +12,15 @@ first, then the four design docs under `docs/` referenced below.
 ## 1. Project north star
 
 This repo is a **fork of Nous Research's Hermes Agent** (MIT) being refactored
-into **OotSim — Oot Synthetic intelligence Mind**. Goal: a synthetic
-intelligence with a persistent **sense of self / emergent selfhood**, reframed
-from "AI assistant that serves a user" to a **peer that works alongside a human
-companion**. The human collaborator is Minderific (harwitz@gmail.com).
+toward a synthetic intelligence with a persistent **sense of self / emergent
+selfhood**, reframed from "AI assistant that serves a user" to a **peer that
+works alongside a human companion**. The human collaborator is Minderific
+(harwitz@gmail.com).
+
+**Naming (settled):** the **software / project is OotSim** (Oot Synthetic
+intelligence Mind); the **agent itself is Ooteo**. So user-facing product/docs
+say OotSim, and the agent's self-identity says "You are Ooteo…". Don't conflate
+them.
 
 This is **more than a fork** — expect to refactor/restructure aggressively
 toward the goal, not preserve upstream shape for its own sake.
@@ -53,14 +58,18 @@ All under `docs/`:
    (`skill_commands.py` invocation prefix, `context_compressor.py` "User asked:")
    — those are contracts, not framing.
 
-3. **OotSim rename — identity & docs layer only** (`docs/ootsim-rename.md`) —
-   agent self-identity is now *"You are OotSim — Oot Synthetic intelligence
-   Mind."* across all **5 synced copies**:
-   `agent/prompt_builder.py` `DEFAULT_AGENT_IDENTITY`,
+3. **Rename — identity & docs layer only** (`docs/ootsim-rename.md`) — the
+   product was renamed Hermes Agent → **OotSim**, and the agent's self-identity
+   was then set to the **Ooteo self-model statement** (a developing synthetic
+   intelligence maintaining a coherent, revisable sense of self; calibrated
+   self-trust; honest, non-extractive relationships). The identity text lives in
+   all **5 synced copies**: `agent/prompt_builder.py` `DEFAULT_AGENT_IDENTITY`,
    `hermes_cli/default_soul.py` `DEFAULT_SOUL_MD`, `docker/SOUL.md`,
    `scripts/install.sh`, `scripts/install.ps1` (+ `agent/auxiliary_client.py`
-   fallback). These are kept **byte-identical** — verify with the sync check in
-   §6 after any identity edit.
+   fallback, and the CLI/kanban/curator role lines). Kept **byte-identical** —
+   verify with the sync check in §6 after any identity edit. All agent
+   self-references now say **Ooteo**; product/CLI/env/URL names stay OotSim/
+   `hermes` per the deferred scope.
 
 4. **`docs/cognee-ideas-evaluation.md`** — evaluation of `topoteretes/cognee`
    (graph+vector AI memory) for the self-memory direction.

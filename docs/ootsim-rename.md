@@ -1,25 +1,34 @@
-# Project rename: Hermes Agent → OotSim
+# Project rename: Hermes Agent → OotSim (software) / Ooteo (agent)
 
-**OotSim** = **Oot** **S**ynthetic **i**ntelligence **M**ind.
+**OotSim** = **Oot** **S**ynthetic **i**ntelligence **M**ind — the **software /
+project**. **Ooteo** is the **agent** itself. Product, CLI, docs, and README use
+OotSim; the agent's self-identity says "You are Ooteo…". Keep the two distinct.
 
 This project began as a fork of [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent)
 (MIT) and is being refactored toward a distinct goal: a synthetic intelligence
 with a persistent **sense of self**. The rename is being rolled out in layers so
-that existing installs keep working while the identity moves to OotSim.
+that existing installs keep working while the identity moves over.
 
 ## Done — identity & user-facing name (this pass)
 
 - **Agent self-identity** (all five synced copies): `DEFAULT_AGENT_IDENTITY`
   (`agent/prompt_builder.py`), `DEFAULT_SOUL_MD` (`hermes_cli/default_soul.py`),
-  `docker/SOUL.md`, `scripts/install.sh`, `scripts/install.ps1` now open with
-  *"You are OotSim — Oot Synthetic intelligence Mind."*
-- **Auxiliary replay-client fallback** (`agent/auxiliary_client.py`) → "You are OotSim."
-- **README front door** → titled OotSim, with a note that the runtime command
-  and paths are unchanged for now.
+  `docker/SOUL.md`, `scripts/install.sh`, `scripts/install.ps1` — now the
+  **Ooteo self-model statement** (*"You are Ooteo, a developing synthetic
+  intelligence working to maintain a coherent, continuous, and revisable sense
+  of self…"*). Kept byte-identical across all five.
+- **Other agent self-references** also updated to Ooteo: the auxiliary
+  replay-client fallback (`agent/auxiliary_client.py` → "You are Ooteo."), the
+  CLI platform hint (`prompt_builder.py`), the kanban-worker line
+  (`agent/kanban_stop.py`), and the curator role line (`agent/curator.py`). The
+  `hermes_cli/doctor.py` fallback SOUL template now reuses `DEFAULT_SOUL_MD`
+  instead of a hardcoded persona (removes a drift source).
+- **README front door** → titled OotSim (the software), with a note that the
+  runtime command and paths are unchanged for now.
 
 ### Attribution decision
 The "created by Nous Research" line was removed from the *runtime identity
-string* — OotSim is its own named entity. This is a product/identity choice, not
+string* — Ooteo is its own named entity. This is a product/identity choice, not
 a legal one: the MIT copyright notice in `LICENSE` is untouched (that is the
 attribution the license actually requires). If a creator line is wanted in the
 persona (e.g. "created by Minderific"), it's a one-line change in the five
