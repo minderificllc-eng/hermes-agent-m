@@ -136,6 +136,26 @@ flags. **Migrate one consumer at a time behind existing helper names.**
 **Risk: moderate-high** (precedence subtleties, e.g. `claude-opus-4` anchoring)
 — highest correctness payoff of the folds.
 
+**⚠️ Investigated 2026-07-17 — NOT a mechanical merge; do NOT collapse the
+bare `"claude"` checks into one `is_anthropic_model()`.** Reading the six
+call sites shows they answer *different, context-specific* questions, not
+one shared predicate:
+- `agent_runtime_helpers.py:1607/1641` deliberately keeps `is_claude`
+  SEPARATE from `is_anthropic_wire`: Kimi/Moonshot on OpenRouter use
+  Claude's cache_control envelope without being Claude, and the
+  cache-key decision needs both signals. Collapsing them silently serves
+  0% cache hits and re-bills the full prompt every turn.
+- `agent_init.py:1088` is specifically *claude-on-OpenRouter* (adds an
+  `x-anthropic-beta` header only on that route), not "any anthropic model".
+- `anthropic_adapter.py:118` is the native-wire predicate.
+So the real work is a genuine per-site capability model (which transport
+wire format, which cache envelope, which header route), each migration
+verified against current wire behavior — exactly the "moderate-high risk,
+one consumer at a time" this entry already flags. This mirrors the §2.3
+child-env finding: the audit's "N copies → 1" framing understated
+deliberate divergence in both places. Bootstrap wire-format
+characterization tests BEFORE touching these.
+
 ### 1.6 Stop-guard/nudge injections → one `StopGuard` protocol
 
 ~10 "inject a synthetic turn to steer the loop" mechanisms exist; **three share

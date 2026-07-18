@@ -151,10 +151,59 @@ pre-reframing upstream commit on this platform — pre-existing, not ours.
   agent+plugins tests green. NOTE: `browser_registry._resolve` has no
   production caller — `browser_tool._get_cloud_provider` still does its
   own resolution; unifying that is a candidate follow-up.
-- Still deferred: §1.10 `get_setting`/`cfg_get` migration (44 sites,
-  each needs a precedence audit). Next fold up: `CommandDef` handler
-  dispatch — kill the twin command ladders (cli.py:8434 depth-79 +
-  gateway/run.py ~50-branch), §1.4.
+- ✅ `StopGuard` fold COMPLETE (2026-07-17): the 3 stop-guard injections
+  in `conversation_loop.py` (verify-on-stop / pre_verify / kanban) share
+  one `_apply_stop_guard` helper; the #55733 role-alternation invariant
+  lives in one place. Nudge-build/logging stay per-guard.
+- ✅ `_send_chunks` fold COMPLETE (2026-07-17): the 6 send_message media
+  chunk-loops (Discord/Matrix/Signal/Yuanbao/Feishu/WhatsApp) → one
+  helper + a per-platform send closure and `[]` vs `None` empty sentinel.
+- ✅ tts_tool provider table COMPLETE (2026-07-17): the 11-arm built-in
+  ladder (depth 16) → `_BuiltinTTS` table; parity-pinned to
+  `BUILTIN_TTS_PROVIDERS` minus edge. edge stays the default branch.
+- ✅ `select_provider_and_model` `_simple_flows` table COMPLETE
+  (2026-07-17): 12 uniform-signature provider arms → a table; args=/
+  special-shape arms stay explicit.
+- ✅ §2.3 child-env scrub: RESOLVED AS A DRIFT-GUARD, not a merge (the
+  three policies are deliberately different postures; merge would weaken
+  the sandbox's default-drop). `TestProviderCredentialCrossDrift` pins
+  the cross-consumer invariant. See doc §2.3.
+- ✅ Oracle stayed green throughout — the full 2,041-file suite was
+  certified clean earlier this session and every fold above ran its
+  covering suites (agent/, plugins/, tools/, hermes_cli/) before commit.
+
+### Remaining — the three HIGH-CARE mega-items (NOT mechanical folds)
+Investigation this session repeatedly found the audit's "N copies → 1"
+framing understates deliberate divergence (child-env §2.3, model-caps
+§1.5 — both corrected in the doc). Treat the rest the same way: analyze
+per-site, bootstrap characterization coverage, migrate incrementally.
+
+1. **`CommandDef` dispatch (§1.4)** — `cli.py:8434 process_command`
+   (depth-79, 71-branch) + `gateway/run.py` (~52-branch). The ONE
+   mechanical mega-item (68/71 cli arms are one-liners), BUT ~50 of the
+   71 commands have NO `tests/cli/` coverage, so a dispatch-table
+   transcription error would ship silently. Correct sequence
+   (friction-unlock): write characterization tests covering all 71
+   commands FIRST, then convert each ladder to a per-class
+   `{canonical: method}` table (NOT shared handlers on the frozen
+   module-level `CommandDef` — cli/gateway handlers are sync-vs-async and
+   belong to different classes; the registry already gives both the
+   alias→canonical `resolve_command`).
+2. **model-capabilities (§1.5)** — see the doc's ⚠️ note: the bare
+   `"claude"` checks are context-specific (wire format / cache envelope /
+   header route); a naive `is_anthropic_model()` causes silent 0%-cache
+   /re-billing regressions. Needs a real per-transport capability model +
+   wire-format characterization tests.
+3. **`run_conversation` 4,939-line split (§3)** — highest value, hottest
+   path. Do the doc's 3 ordered steps as SEPARATE verified commits:
+   (a) single `_finalize_turn()` for all ~30 exits (mechanical);
+   (b) extract the inner retry-loop into a `TurnAttempt` object owning its
+   counters; (c) strategy table on `error_classifier.reason`. Land each
+   with the full agent/ + run_agent/ suites green.
+
+- Also open (lower priority): §1.10 `get_setting`/`cfg_get` migration
+  (44 sites, each needs an individual precedence audit — tedious, do in
+  small batches); §1.9 adapter retry-hook (incremental, per-kind).
 
 Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
 `run_conversation` 4,939-line split, model-capabilities table) are scoped in
