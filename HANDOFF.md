@@ -406,6 +406,26 @@ Also hard-won environment/verification lessons:
   SQLITE_DBCONFIG_DEFENSIVE on; stock bash is 3.2 (no BASHPID); zombie
   processes pass `kill(pid, 0)`.
 
+### ⚠️ In-flight at session end: selfgraph pilot (PILOT STATUS, working)
+
+`plugins/memory/selfgraph/` + `tests/plugins/memory/test_selfgraph.py` —
+the cognee-inspired self-model graph pilot (typed nodes with a first-class
+Self node, remember/recall/forget tools, FTS5 + 1-hop expansion,
+usage-weighted salience decay, stable core-self prompt block), SQLite-only
+behind the `MemoryProvider` seam, auto-discovered, zero core changes.
+**Verified interactively end-to-end** (remember → recall → core block →
+discovery) after fixing a real deadlock the behavioral run caught
+(remember() held a non-reentrant Lock then re-entered via self_id →
+switched to RLock — review alone missed it). Known open items, in order:
+1. `recall()`'s FTS join is AND-semantics; natural-question prefetch
+   ("who is X?") matches nothing — change the term join to `" OR "` in
+   `SelfGraphStore.recall` (edit was drafted but not applied at wrap-up).
+2. Re-run `scripts/run_tests.sh tests/plugins/memory/test_selfgraph.py`
+   (the only runner run was against the pre-RLock deadlock version, which
+   timed out; post-fix the suite has not been run — do this FIRST).
+3. Then the eval doc's next steps: async population from the
+   background_review fork, curator-driven consolidation/decay.
+
 ### Next work, in leverage order
 
 1. **`run_conversation` split steps (b)+(c)** — the ONE remaining

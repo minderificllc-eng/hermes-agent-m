@@ -1,0 +1,3 @@
+name: selfgraph
+version: 0.1.0
+description: "Self-model graph memory — typed entity/relationship graph with a first-class Self node, episodic/temporal recall, and usage-weighted salience. SQLite+FTS5, no external services. Cognee-inspired pilot (docs/cognee-ideas-evaluation.md)."
