@@ -393,12 +393,25 @@ class BaseEnvironment(ABC):
         # writers would pick the SAME temp name, clobber each other's temp
         # mid-write, and mv would then publish a torn file (the corruption is
         # only narrowed, not closed).  ``$BASHPID`` is the actual subshell PID
-        # and is genuinely unique per writer, which closes the race.  The
-        # static path is shell-quoted (Windows/Git-Bash drive letters, spaces)
-        # with ``$BASHPID`` left outside the quotes so it still expands.
-        _snap_tmp = self._quote_shell_path(self._snapshot_path + ".tmp.") + "$BASHPID"
+        # and is genuinely unique per writer, which closes the race.  BUT
+        # macOS's stock /bin/bash is 3.2, which has no ``BASHPID`` — it
+        # expands EMPTY there, giving every writer the same temp name and
+        # resurrecting the tear.  ``${BASHPID:-$(sh -c 'echo $PPID')}``
+        # falls back to asking a child sh for its parent PID (= this
+        # subshell's real PID); bash >= 4 never forks the fallback.  The
+        # static path is shell-quoted (Windows/Git-Bash drive letters,
+        # spaces) with the expansion left outside the quotes.
+        # The pid suffix is captured ONCE into __hermes_snap_pid and the temp
+        # name references the variable: on bash 3.2 every $(...) expansion
+        # forks a fresh subshell, so inlining the fallback in each reference
+        # yields a DIFFERENT pid per reference and the mv misses the temp.
+        _snap_tmp = (
+            self._quote_shell_path(self._snapshot_path + ".tmp.")
+            + '"$__hermes_snap_pid"'
+        )
         bootstrap = (
             f"umask 077\n"
+            f"__hermes_snap_pid=${{BASHPID:-$(sh -c 'echo $PPID')}}\n"
             f"export -p > {_snap_tmp}\n"
             # Dump function definitions, filtering out private (``_``-prefixed)
             # helpers — mainly bash-completion internals (``_git``, ``_make``…)
@@ -512,8 +525,18 @@ class BaseEnvironment(ABC):
         # truncated/half-written file.  ``$BASHPID`` (not ``$$``) is the actual
         # subshell PID — unique per concurrent ``&``-launched writer — so two
         # writers never share a temp name and clobber each other before the mv.
-        # Static path shell-quoted (Windows/spaces); ``$BASHPID`` left to expand.
-        _snap_tmp = self._quote_shell_path(self._snapshot_path + ".tmp.") + "$BASHPID"
+        # macOS bash 3.2 has no BASHPID (empty expansion = shared temp name =
+        # the tear again), hence the $(sh -c 'echo $PPID') fallback — the
+        # child's PPID is this subshell's real PID. Static path shell-quoted
+        # (Windows/spaces); the expansion left outside the quotes.
+        # The pid suffix is captured ONCE into __hermes_snap_pid and the temp
+        # name references the variable: on bash 3.2 every $(...) expansion
+        # forks a fresh subshell, so inlining the fallback in each reference
+        # yields a DIFFERENT pid per reference and the mv misses the temp.
+        _snap_tmp = (
+            self._quote_shell_path(self._snapshot_path + ".tmp.")
+            + '"$__hermes_snap_pid"'
+        )
 
         parts = []
 
@@ -547,6 +570,7 @@ class BaseEnvironment(ABC):
         # orphaned (cleaned up wholesale in LocalEnvironment.cleanup too).
         if self._snapshot_ready:
             parts.append(
+                f"__hermes_snap_pid=${{BASHPID:-$(sh -c 'echo $PPID')}}; "
                 f"{{ export -p > {_snap_tmp} && mv -f {_snap_tmp} {_quoted_snap}; }} "
                 f"2>/dev/null || rm -f {_snap_tmp} 2>/dev/null || true"
             )

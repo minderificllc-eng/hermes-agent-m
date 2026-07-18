@@ -124,7 +124,7 @@ class TestAtomicSnapshotWrite:
         env = _TestableEnv()
         env._snapshot_ready = True
         wrapped = env._wrap_command("echo hi", "/tmp")
-        assert "$BASHPID" in wrapped
+        assert "${BASHPID:-" in wrapped  # braced: bash-3.2 fallback form
         # The bare $$ temp form must be gone.
         assert ".tmp.$$" not in wrapped
 
@@ -138,10 +138,11 @@ class TestAtomicSnapshotWrite:
         wrapped = env._wrap_command("echo hi", "/tmp")
         # The static path (with its space) is shlex-quoted as a single word, with
         # $BASHPID appended OUTSIDE the quotes so it still expands at runtime.
-        assert "'/tmp/has space/hermes-snap-x.sh.tmp.'$BASHPID" in wrapped
-        # The space must never appear bare/unquoted in the temp token (that would
-        # word-split into two args and break the redirect/mv).
-        assert " space/hermes-snap-x.sh.tmp.$BASHPID" not in wrapped
+        assert "'/tmp/has space/hermes-snap-x.sh.tmp.'" + '"$__hermes_snap_pid"' in wrapped
+        # The path must never appear bare/unquoted after a redirect or mv/rm
+        # (word-splitting on the space would break the redirect target).
+        assert "> /tmp/has space/" not in wrapped
+        assert "-f /tmp/has space/" not in wrapped
 
     def test_wrap_command_mv_chained_on_export_success(self):
         """A failed/partial ``export -p`` must NOT mv a torn temp over a good
@@ -171,7 +172,7 @@ class TestAtomicSnapshotWrite:
             pass
         boot = captured.get("cmd", "")
         assert ".tmp." in boot and "mv -f " in boot, boot
-        assert "$BASHPID" in boot
+        assert "${BASHPID:-" in boot  # braced: bash-3.2 fallback form
         assert ".tmp.$$" not in boot
 
     def test_snapshot_writes_use_private_umask_after_user_command(self):
@@ -225,9 +226,10 @@ class TestAtomicSnapshotConcurrencyBehavioral:
         import shlex
         snap = str(tmp_path / "hermes-snap-x.sh")
         _q = shlex.quote
-        _snap_tmp = _q(snap + ".tmp.") + "$BASHPID"
+        _snap_tmp = _q(snap + ".tmp.") + '"$__hermes_snap_pid"' 
         # One writer iteration = the exact atomic sequence _wrap_command emits.
         writer = (
+            "__hermes_snap_pid=${BASHPID:-$(sh -c 'echo $PPID')}; "
             "for i in $(seq 1 80); do "
             "export BIG_$i=$(head -c 600 /dev/zero | tr '\\0' x); "
             f"{{ export -p > {_snap_tmp} && mv -f {_snap_tmp} {_q(snap)}; }} "
