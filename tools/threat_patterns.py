@@ -56,7 +56,12 @@ MAX_SCAN_CHARS = 65_536
 # ``(?:\w+\s+)*`` which is ambiguous and can backtrack heavily on adversarial
 # near-misses.  Eight filler words is enough for the intended obfuscation
 # bypasses without introducing unbounded repetition.
-_FILLER = r"(?:\w+\s+){0,8}"
+#
+# FILLER is the canonical export: any consumer building its own injection
+# regexes (e.g. cronjob_tools) must use it rather than re-typing the filler,
+# so a future backtracking fix lands everywhere at once.
+FILLER = r"(?:\w+\s+){0,8}"
+_FILLER = FILLER
 
 # Each entry: (regex, pattern_id, scope)
 # scope ∈ {"all", "context", "strict"}

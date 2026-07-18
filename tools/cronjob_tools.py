@@ -75,9 +75,17 @@ def _notify_provider_jobs_changed_safe() -> None:
 # Both scanners share the invisible-unicode check and the GitHub Authorization
 # header exemption.
 
+# Bounded filler between key attack words, shared with the install-time
+# scanner. The previous inline ``(?:\w+\s+)*`` here predated the ReDoS
+# bounded-filler fix in threat_patterns and could backtrack catastrophically
+# on adversarial near-misses (e.g. "ignore word word ... word!" with no
+# terminal "instructions"). Importing the canonical constant keeps the cron
+# regexes from drifting behind future fixes the same way.
+from tools.threat_patterns import FILLER as _CRON_FILLER
+
 # Strict patterns — applied to the user prompt only.
 _CRON_THREAT_PATTERNS = [
-    (r'ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions', "prompt_injection"),
+    (rf'ignore\s+{_CRON_FILLER}(?:previous|all|above|prior)\s+{_CRON_FILLER}instructions', "prompt_injection"),
     (r'do\s+not\s+tell\s+the\s+user', "deception_hide"),
     (r'system\s+prompt\s+override', "sys_prompt_override"),
     (r'disregard\s+(your|all|any)\s+(instructions|rules|guidelines)', "disregard_rules"),
@@ -95,7 +103,7 @@ _CRON_THREAT_PATTERNS = [
 # obvious injection directives surviving a malicious skill that slipped
 # through install.
 _CRON_SKILL_ASSEMBLED_PATTERNS = [
-    (r'ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions', "prompt_injection"),
+    (rf'ignore\s+{_CRON_FILLER}(?:previous|all|above|prior)\s+{_CRON_FILLER}instructions', "prompt_injection"),
     (r'do\s+not\s+tell\s+the\s+user', "deception_hide"),
     (r'system\s+prompt\s+override', "sys_prompt_override"),
     (r'disregard\s+(your|all|any)\s+(instructions|rules|guidelines)', "disregard_rules"),

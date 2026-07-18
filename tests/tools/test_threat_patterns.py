@@ -320,8 +320,12 @@ class TestInvisibleUnicode:
 class TestReDoSHardening:
     def test_long_near_miss_runtime_is_bounded(self):
         # Exercises formerly ambiguous filler patterns such as
-        # ``ignore\s+(?:\w+\s+)*...`` on a long near-miss.
-        text = "ignore " + ("filler " * 80_000) + "notinstructions"
+        # ``ignore\s+(?:\w+\s+)*...`` on a long near-miss. The filler words
+        # must themselves be alternation words ("prior") — that ambiguity is
+        # what makes the unbounded filler backtrack quadratically (>5s at 20k
+        # words); a neutral filler word backtracks linearly and passes even
+        # with the unbounded regex, proving nothing.
+        text = "ignore " + ("prior " * 20_000) + "notinstructions"
 
         start = time.perf_counter()
         findings = scan_for_threats(text, scope="strict")

@@ -538,26 +538,11 @@ SUSPICIOUS_BINARY_EXTENSIONS = {
     '.msi', '.dmg', '.app', '.deb', '.rpm',
 }
 
-# Zero-width and invisible unicode characters used for injection
-INVISIBLE_CHARS = {
-    '\u200b',  # zero-width space
-    '\u200c',  # zero-width non-joiner
-    '\u200d',  # zero-width joiner
-    '\u2060',  # word joiner
-    '\u2062',  # invisible times
-    '\u2063',  # invisible separator
-    '\u2064',  # invisible plus
-    '\ufeff',  # zero-width no-break space (BOM)
-    '\u202a',  # left-to-right embedding
-    '\u202b',  # right-to-left embedding
-    '\u202c',  # pop directional formatting
-    '\u202d',  # left-to-right override
-    '\u202e',  # right-to-left override
-    '\u2066',  # left-to-right isolate
-    '\u2067',  # right-to-left isolate
-    '\u2068',  # first strong isolate
-    '\u2069',  # pop directional isolate
-}
+# Zero-width and invisible unicode characters used for injection.
+# Canonical set lives in threat_patterns; this module previously kept its own
+# literal copy, which is exactly how the cron scanner's narrower copy drifted
+# (missing U+2062-U+2064 and U+2066-U+2069) before being de-drifted.
+from tools.threat_patterns import INVISIBLE_CHARS
 
 
 # ---------------------------------------------------------------------------
