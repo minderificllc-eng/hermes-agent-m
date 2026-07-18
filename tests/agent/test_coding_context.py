@@ -350,7 +350,7 @@ class TestRuntimeMode:
         _git_init(tmp_path)
         mode = cc.resolve_runtime_mode(platform="cli", cwd=tmp_path, config={"agent": {"coding_context": "on"}})
         blocks = mode.system_blocks()
-        assert any("coding agent" in b for b in blocks)
+        assert any("pairing with a human companion" in b for b in blocks)
         assert any("Workspace" in b for b in blocks)
 
     def test_coding_instructions_append_their_own_block(self, tmp_path):

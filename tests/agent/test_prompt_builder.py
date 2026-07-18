@@ -651,7 +651,7 @@ class TestBuildNousSubscriptionPrompt:
 
         assert "Browser Use" in prompt
         assert "Modal execution is optional" in prompt
-        assert "do not ask the user for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys" in prompt
+        assert "do not ask the human for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys" in prompt
 
     def test_non_subscriber_prompt_includes_relevant_upgrade_guidance(self, monkeypatch):
         monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: True)
@@ -700,7 +700,7 @@ class TestBuildContextFilesPrompt:
         with patch("pathlib.Path.home", return_value=fake_home):
             result = build_context_files_prompt(cwd=str(tmp_path))
         assert "Project Context" in result
-        assert "Hermes Agent" in result
+        assert "Ooteo" in result
 
     def test_loads_agents_md(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Use Ruff for linting.")
