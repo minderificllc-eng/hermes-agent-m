@@ -47,6 +47,13 @@ class TestStore:
         assert "refactor-marathon" in names
         assert "OotSim" in names  # 1-hop neighbour
 
+    def test_natural_question_matches_on_any_term(self, store):
+        # OR-joined FTS: a question containing mostly non-indexed words must
+        # still match on the one term that appears in a node.
+        store.remember("Person", "Minderific", "The human companion.")
+        hits = store.recall("who is Minderific?")
+        assert any(r["name"] == "Minderific" for r in hits)
+
     def test_temporal_recall_since_filter(self, store):
         store.remember("Episode", "old-event", "Long ago.")
         cutoff = time.time() + 1

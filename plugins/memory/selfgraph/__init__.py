@@ -196,7 +196,9 @@ class SelfGraphStore:
             seeds: List[int] = []
             if query.strip():
                 # FTS5 bareword query; quote to disable operators from user text.
-                fts_query = " ".join(
+                # OR-join so natural questions ("who is X?") match on any term
+                # rather than requiring every word to appear in one node.
+                fts_query = " OR ".join(
                     f'"{t}"' for t in query.replace('"', " ").split() if t
                 ) or '""'
                 try:
