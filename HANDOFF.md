@@ -132,10 +132,19 @@ pre-reframing upstream commit on this platform — pre-existing, not ours.
 - **Skipped deliberately:** `truncate_middle` fold — the three
   implementations share ~4 lines and their markers are model-visible
   behavior (byte-stable per ground rules); a shared helper is ceremony.
-- **Remaining from Phase 1:** `main()` subparser extraction (item 4 —
-  mechanical, large diff, pattern already underway: 86 `build_*_parser`
-  refs). And the deferred §1.10 `get_setting`/`cfg_get` migration (44
-  sites, each needs a precedence audit).
+- ✅ `main()` subparser extraction COMPLETE (3 commits, 2026-07-17): all
+  13 remaining inline blocks moved to `hermes_cli/subcommands/`;
+  `main()` 1,977 → 538 lines; only the dynamic plugin-CLI loop stays
+  inline. 8,686 hermes_cli tests green.
+- ✅ **Oracle certified clean**: the full 2,041-file suite passes on this
+  machine. Getting there surfaced and fixed SIX real macOS product bugs
+  (temp-dir writes blocked as "sensitive path", verify-artifact rm
+  exemption dead, SQLite repair broken under defensive mode, env
+  snapshot TEAR from empty $BASHPID in bash 3.2, + test-infra gaps).
+  Green now means green — treat any new failure as signal.
+- Still deferred: §1.10 `get_setting`/`cfg_get` migration (44 sites,
+  each needs a precedence audit). Next fold up: `CapabilityRegistry[T]`
+  (docs/refactoring-opportunities.md §1.1).
 
 Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
 `run_conversation` 4,939-line split, model-capabilities table) are scoped in
