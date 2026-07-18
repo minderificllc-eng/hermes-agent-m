@@ -3130,25 +3130,35 @@ def select_provider_and_model(args=None):
         _aux_config_menu()
         return
 
-    # Step 2: Provider-specific setup + model selection
-    if selected_provider == "openrouter":
-        _model_flow_openrouter(config, current_model)
-    elif selected_provider == "moa":
-        _model_flow_moa(config, current_model)
+    # Step 2: Provider-specific setup + model selection.
+    #
+    # Providers whose flow has the uniform ``(config, current_model)``
+    # signature dispatch through a table so a new same-shaped provider is a
+    # one-line entry, not another elif. Flows needing ``args=`` or a
+    # different shape (custom/named/remove/api-key-set/aux) stay explicit
+    # below.
+    _simple_flows = {
+        "openrouter": _model_flow_openrouter,
+        "moa": _model_flow_moa,
+        "openai-codex": _model_flow_openai_codex,
+        "qwen-oauth": _model_flow_qwen_oauth,
+        "copilot-acp": _model_flow_copilot_acp,
+        "copilot": _model_flow_copilot,
+        "anthropic": _model_flow_anthropic,
+        "kimi-coding": _model_flow_kimi,
+        "stepfun": _model_flow_stepfun,
+        "bedrock": _model_flow_bedrock,
+        "vertex": _model_flow_vertex,
+        "azure-foundry": _model_flow_azure_foundry,
+    }
+    if selected_provider in _simple_flows:
+        _simple_flows[selected_provider](config, current_model)
     elif selected_provider == "nous":
         _model_flow_nous(config, current_model, args=args)
-    elif selected_provider == "openai-codex":
-        _model_flow_openai_codex(config, current_model)
     elif selected_provider == "xai-oauth":
         _model_flow_xai_oauth(config, current_model, args=args)
-    elif selected_provider == "qwen-oauth":
-        _model_flow_qwen_oauth(config, current_model)
     elif selected_provider == "minimax-oauth":
         _model_flow_minimax_oauth(config, current_model, args=args)
-    elif selected_provider == "copilot-acp":
-        _model_flow_copilot_acp(config, current_model)
-    elif selected_provider == "copilot":
-        _model_flow_copilot(config, current_model)
     elif selected_provider == "custom":
         _model_flow_custom(config)
     elif (
@@ -3165,18 +3175,6 @@ def select_provider_and_model(args=None):
         _model_flow_named_custom(config, provider_info)
     elif selected_provider == "remove-custom":
         _remove_custom_provider(config)
-    elif selected_provider == "anthropic":
-        _model_flow_anthropic(config, current_model)
-    elif selected_provider == "kimi-coding":
-        _model_flow_kimi(config, current_model)
-    elif selected_provider == "stepfun":
-        _model_flow_stepfun(config, current_model)
-    elif selected_provider == "bedrock":
-        _model_flow_bedrock(config, current_model)
-    elif selected_provider == "vertex":
-        _model_flow_vertex(config, current_model)
-    elif selected_provider == "azure-foundry":
-        _model_flow_azure_foundry(config, current_model)
     elif selected_provider in {
         "openai-api",
         "gemini",
