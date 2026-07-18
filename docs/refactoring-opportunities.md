@@ -224,13 +224,23 @@ incrementally.
 2. **Cron threat regexes never received the ReDoS bounded-filler fix**
    (`cronjob_tools.py:80` unbounded `(?:\w+\s+)*` vs `threat_patterns.py:59`).
    → closed by §1.2.
-3. **Three independent child-env scrub policies** (`code_execution_tool.py:146`,
-   `environments/local.py:156`, `browser_tool.py:90`) — each patchable
-   independently, which is exactly how GHSA-rhgp-j443-p4rf class issues arise.
-   `local.py`'s registry-derived blocklist is the natural single source; a
-   `tools/tool_boundary.py` (`redact_output` / `child_env(purpose)` /
-   `enforce_command_guard`) would make every tool declare its boundary instead
-   of re-implementing it.
+3. **Three child-env scrub policies** (`code_execution_tool.py:146`,
+   `environments/local.py:156`, `browser_tool.py:90`). **RESOLVED as a
+   drift-guard, NOT a merge (2026-07-17).** A closer read shows these are
+   three *legitimately different* postures, not copies: `browser_tool`
+   already delegates to `local.py`; `local.py` is a registry-derived
+   blocklist (default-pass); `code_execution_tool._scrub_child_env` is
+   **default-DROP** (allowlist) — strictly stronger and structurally unable
+   to leak a provider credential. Merging them behind a single
+   `tool_boundary.child_env()` would have to *weaken* the sandbox's
+   default-drop to a blocklist, or over-restrict local's subprocess env —
+   net-negative for security. Instead, `TestProviderCredentialCrossDrift`
+   (in `tests/tools/test_code_execution_windows_env.py`) pins the invariant
+   that actually prevents GHSA-rhgp-j443-p4rf-class drift: every
+   provider-registry credential var is scrubbed by BOTH the local blocklist
+   and the execute_code sandbox, with `CLAUDE_CODE_OAUTH_TOKEN` as the one
+   documented, pinned passthrough exception (#55878). Do **not** attempt the
+   `tool_boundary` merge — the guard is the correct control.
 
 ---
 

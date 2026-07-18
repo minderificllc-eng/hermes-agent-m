@@ -206,6 +206,64 @@ class TestScrubChildEnvPassthroughInteraction:
         assert "OPENAI_API_KEY" not in scrubbed
 
 
+class TestProviderCredentialCrossDrift:
+    """Cross-consumer drift guard for GHSA-rhgp-j443-p4rf-class issues.
+
+    Three subsystems scrub subprocess env with three DIFFERENT — and
+    deliberately different — strategies, sourced from one registry:
+
+    - ``environments/local.py``: registry-derived blocklist (default-pass,
+      block-listed) for general subprocess env.
+    - ``code_execution_tool._scrub_child_env``: default-DROP (allowlist)
+      for the execute_code sandbox — strictly stronger, structurally can't
+      leak a provider credential.
+    - ``browser_tool._build_browser_env``: delegates to local.py, then
+      re-adds only browser-backend keys.
+
+    They are NOT merged (merging would weaken the sandbox's default-drop
+    posture). This test instead pins the invariant that actually matters:
+    every provider-credential env var the registry knows about is scrubbed
+    by BOTH the local blocklist AND the execute_code sandbox. If a future
+    provider adds a key-shaped var that some path fails to catch, this
+    fails before it ships.
+    """
+
+    def _provider_credential_vars(self):
+        from hermes_cli.auth import PROVIDER_REGISTRY
+
+        names = set()
+        for pconfig in PROVIDER_REGISTRY.values():
+            names.update(pconfig.api_key_env_vars)
+        return names
+
+    # CLAUDE_CODE_OAUTH_TOKEN is a documented, deliberate exception in
+    # local.py (#55878): it belongs to the user's Claude Code install, not a
+    # Hermes provider path, and stripping it logged users out of interactive
+    # Claude sessions. Pinning it here means a future provider var can't be
+    # added to this allow-through set without a test change + reviewer's eyes.
+    _INTENTIONAL_LOCAL_PASSTHROUGH = frozenset({"CLAUDE_CODE_OAUTH_TOKEN"})
+
+    def test_local_blocklist_covers_all_provider_keys(self):
+        from tools.environments.local import _build_provider_env_blocklist
+
+        blocklist = _build_provider_env_blocklist()
+        missing = (
+            self._provider_credential_vars()
+            - blocklist
+            - self._INTENTIONAL_LOCAL_PASSTHROUGH
+        )
+        assert not missing, f"provider api-key vars missing from local blocklist: {sorted(missing)}"
+
+    def test_execute_code_sandbox_drops_all_provider_keys(self):
+        creds = self._provider_credential_vars()
+        env = {name: "secret-value" for name in creds}
+        env["PATH"] = "/usr/bin"  # a legitimately-preserved var as a control
+        scrubbed = _scrub_child_env(env, is_passthrough=_no_passthrough, is_windows=False)
+        leaked = [name for name in creds if name in scrubbed]
+        assert not leaked, f"provider credentials leaked into execute_code sandbox: {leaked}"
+        assert scrubbed.get("PATH") == "/usr/bin"  # control: non-secret still passes
+
+
 @pytest.mark.skipif(
     sys.platform != "win32",
     reason="Winsock-specific regression — only meaningful on Windows",
