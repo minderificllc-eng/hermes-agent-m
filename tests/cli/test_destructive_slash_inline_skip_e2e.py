@@ -49,6 +49,7 @@ def _make_cli_stub():
     )
     # /new's body was extracted from process_command into _cmd_new; bind it too.
     self_._cmd_new = HermesCLI._cmd_new.__get__(self_, type(self_))
+    self_._slash_command_tables = HermesCLI._slash_command_tables.__get__(self_, type(self_))
     self_.process_command = HermesCLI.process_command.__get__(self_, type(self_))
     return self_, new_session_calls
 
@@ -120,6 +121,7 @@ def test_new_without_skip_token_still_consults_modal():
         self_, type(self_)
     )
     self_._cmd_new = HermesCLI._cmd_new.__get__(self_, type(self_))
+    self_._slash_command_tables = HermesCLI._slash_command_tables.__get__(self_, type(self_))
     self_.process_command = HermesCLI.process_command.__get__(self_, type(self_))
 
     with patch(

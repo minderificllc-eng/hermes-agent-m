@@ -8459,175 +8459,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         if canonical not in {"resume", "sessions"}:
             self._pending_resume_sessions = None
 
-        if canonical in {"quit", "exit"}:
-            return self._cmd_quit(cmd_original)
-        elif canonical == "help":
-            self.show_help()
-        elif canonical == "profile":
-            self._handle_profile_command()
-        elif canonical == "tools":
-            self._handle_tools_command(cmd_original)
-        elif canonical == "toolsets":
-            self.show_toolsets()
-        elif canonical == "config":
-            self.show_config()
-        elif canonical == "redraw":
-            # Manual recovery for terminal buffer drift from multiplexer
-            # tab switches, subshell ``clear``, SSH window restores, etc.
-            # See issue #8688 (cmux). Ctrl+L is bound to the same helper.
-            self._force_full_redraw()
-            _cprint(f"  {_DIM}✓ UI redrawn{_RST}")
-        elif canonical == "clear":
-            return self._cmd_clear(cmd_original)
-        elif canonical == "history":
-            self.show_history()
-        elif canonical == "title":
-            return self._cmd_title(cmd_original)
-        elif canonical == "handoff":
-            if not self._handle_handoff_command(cmd_original):
-                return False
-        elif canonical == "new":
-            return self._cmd_new(cmd_original)
-        elif canonical == "resume":
-            self._handle_resume_command(cmd_original)
-        elif canonical == "sessions":
-            self._handle_sessions_command(cmd_original)
-        elif canonical == "model":
-            self._handle_model_switch(cmd_original)
-        elif canonical == "codex-runtime":
-            self._handle_codex_runtime(cmd_original)
-
-        elif canonical == "personality":
-            # Use original case (handler lowercases the personality name itself)
-            self._handle_personality_command(cmd_original)
-        elif canonical == "pet":
-            self._handle_pet_command(cmd_original)
-
-        elif canonical == "hatch":
-            self._handle_hatch_command(cmd_original)
-        elif canonical == "retry":
-            retry_msg = self.retry_last()
-            if retry_msg and hasattr(self, '_pending_input'):
-                # Re-queue the message so process_loop sends it to the agent
-                self._pending_input.put(retry_msg)
-        elif canonical == "prompt":
-            self._handle_prompt_compose_command(cmd_original)
-        elif canonical == "undo":
-            return self._cmd_undo(cmd_original)
-        elif canonical == "branch":
-            self._handle_branch_command(cmd_original)
-        elif canonical == "save":
-            self.save_conversation()
-        elif canonical == "cron":
-            self._handle_cron_command(cmd_original)
-        elif canonical == "suggestions":
-            self._handle_suggestions_command(cmd_original)
-        elif canonical == "blueprint":
-            self._handle_blueprint_command(cmd_original)
-        elif canonical == "curator":
-            self._handle_curator_command(cmd_original)
-        elif canonical == "kanban":
-            self._handle_kanban_command(cmd_original)
-        elif canonical == "skills":
-            with self._busy_command(self._slow_command_status(cmd_original)):
-                self._handle_skills_command(cmd_original)
-        elif canonical == "learn":
-            self._handle_learn_command(cmd_original)
-        elif canonical == "memory":
-            self._handle_memory_command(cmd_original)
-        elif canonical == "platforms":
-            self._show_gateway_status()
-        elif canonical == "status":
-            self._show_session_status()
-        elif canonical == "statusbar":
-            self._status_bar_visible = not self._status_bar_visible
-            state = "visible" if self._status_bar_visible else "hidden"
-            self._console_print(f"  Status bar {state}")
-        elif canonical == "timestamps":
-            self._handle_timestamps_command(cmd_original)
-        elif canonical == "verbose":
-            self._toggle_verbose()
-        elif canonical == "footer":
-            self._handle_footer_command(cmd_original)
-        elif canonical == "yolo":
-            self._toggle_yolo()
-        elif canonical == "reasoning":
-            self._handle_reasoning_command(cmd_original)
-        elif canonical == "fast":
-            self._handle_fast_command(cmd_original)
-        elif canonical == "compress":
-            self._manual_compress(cmd_original)
-        elif canonical == "usage":
-            self._handle_usage_command(cmd_original)
-        elif canonical == "credits":
-            self._show_credits()
-        elif canonical == "billing":
-            self._show_billing(cmd_original)
-        elif canonical == "insights":
-            self._show_insights(cmd_original)
-        elif canonical == "copy":
-            self._handle_copy_command(cmd_original)
-        elif canonical == "debug":
-            self._handle_debug_command(cmd_original)
-        elif canonical == "update":
-            if self._handle_update_command():
-                return False
-        elif canonical == "version":
-            from hermes_cli.main import _print_version_info
-
-            _print_version_info(check_updates=True)
-        elif canonical == "paste":
-            self._handle_paste_command()
-        elif canonical == "image":
-            self._handle_image_command(cmd_original)
-        elif canonical == "reload":
-            from hermes_cli.config import reload_env
-            count = reload_env()
-            print(f"  Reloaded .env ({count} var(s) updated)")
-        elif canonical == "reload-mcp":
-            # Interactive reload: confirm first (unless the user has opted out).
-            # The auto-reload path (file watcher) calls _reload_mcp directly
-            # without this confirmation.
-            self._confirm_and_reload_mcp(cmd_original)
-        elif canonical == "reload-skills":
-            with self._busy_command(self._slow_command_status(cmd_original)):
-                self._reload_skills()
-        elif canonical == "bundles":
-            self._handle_bundles_command(cmd_original)
-        elif canonical == "browser":
-            self._handle_browser_command(cmd_original)
-        elif canonical == "plugins":
-            return self._cmd_plugins(cmd_original)
-        elif canonical == "rollback":
-            self._handle_rollback_command(cmd_original)
-        elif canonical == "snapshot":
-            self._handle_snapshot_command(cmd_original)
-        elif canonical == "stop":
-            self._handle_stop_command()
-        elif canonical == "agents":
-            self._handle_agents_command()
-        elif canonical == "journey":
-            self._handle_journey_command(cmd_original)
-        elif canonical == "background":
-            self._handle_background_command(cmd_original)
-        elif canonical == "queue":
-            return self._cmd_queue(cmd_original)
-        elif canonical == "steer":
-            return self._cmd_steer(cmd_original)
-        elif canonical == "goal":
-            self._handle_goal_command(cmd_original)
-        elif canonical == "moa":
-            return self._cmd_moa(cmd_original)
-        elif canonical == "subgoal":
-            self._handle_subgoal_command(cmd_original)
-        elif canonical == "skin":
-            self._handle_skin_command(cmd_original)
-        elif canonical == "voice":
-            self._handle_voice_command(cmd_original)
-        elif canonical == "busy":
-            self._handle_busy_command(cmd_original)
-        else:
+        # Canonical slash-command dispatch. Two tables keep the True/False/None
+        # contract exact: RETURNING handlers propagate their value (quit->False,
+        # undo-invalid->None which the caller treats as exit, cancels->True);
+        # DELEGATE handlers run for effect and fall through to the shared
+        # ``return True`` below. Adding a command is a one-line table entry, not
+        # another elif. Built lazily + cached on first slash command.
+        _returning, _delegates = self._slash_command_tables()
+        _returning_name = _returning.get(canonical)
+        if _returning_name is not None:
+            return getattr(self, _returning_name)(cmd_original)
+        _delegate = _delegates.get(canonical)
+        if _delegate is None:
             return self._cmd_fallback(cmd_original, cmd_lower)
+        _delegate(cmd_original)
         return True
 
     # ── Extracted slash-command handlers ────────────────────────────────
@@ -9141,6 +8986,148 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
+
+    def _cmd_reload_skills(self, cmd_original):
+        with self._busy_command(self._slow_command_status(cmd_original)):
+            self._reload_skills()
+        return True
+
+    def _cmd_reload(self, cmd_original):
+        from hermes_cli.config import reload_env
+        count = reload_env()
+        print(f"  Reloaded .env ({count} var(s) updated)")
+        return True
+
+    def _cmd_version(self, cmd_original):
+        from hermes_cli.main import _print_version_info
+
+        _print_version_info(check_updates=True)
+        return True
+
+    def _cmd_update(self, cmd_original):
+        if self._handle_update_command():
+            return False
+        return True
+
+    def _cmd_statusbar(self, cmd_original):
+        self._status_bar_visible = not self._status_bar_visible
+        state = "visible" if self._status_bar_visible else "hidden"
+        self._console_print(f"  Status bar {state}")
+        return True
+
+    def _cmd_skills(self, cmd_original):
+        with self._busy_command(self._slow_command_status(cmd_original)):
+            self._handle_skills_command(cmd_original)
+        return True
+
+    def _cmd_retry(self, cmd_original):
+        retry_msg = self.retry_last()
+        if retry_msg and hasattr(self, '_pending_input'):
+            # Re-queue the message so process_loop sends it to the agent
+            self._pending_input.put(retry_msg)
+        return True
+
+    def _cmd_handoff(self, cmd_original):
+        if not self._handle_handoff_command(cmd_original):
+            return False
+        return True
+
+    def _cmd_redraw(self, cmd_original):
+        # Manual recovery for terminal buffer drift from multiplexer
+        # tab switches, subshell ``clear``, SSH window restores, etc.
+        # See issue #8688 (cmux). Ctrl+L is bound to the same helper.
+        self._force_full_redraw()
+        _cprint(f"  {_DIM}✓ UI redrawn{_RST}")
+        return True
+
+    def _slash_command_tables(self):
+        """(returning, delegates) canonical->handler maps, built once.
+
+        RETURNING handlers return the exact process_command result;
+        DELEGATE handlers run for side effect and continue the REPL.
+        """
+        cached = getattr(self, '_slash_tables_cache', None)
+        if cached is not None:
+            return cached
+        returning = {
+            "quit": "_cmd_quit",
+            "exit": "_cmd_quit",
+            "redraw": "_cmd_redraw",
+            "clear": "_cmd_clear",
+            "title": "_cmd_title",
+            "handoff": "_cmd_handoff",
+            "new": "_cmd_new",
+            "retry": "_cmd_retry",
+            "undo": "_cmd_undo",
+            "skills": "_cmd_skills",
+            "statusbar": "_cmd_statusbar",
+            "update": "_cmd_update",
+            "version": "_cmd_version",
+            "reload": "_cmd_reload",
+            "reload-skills": "_cmd_reload_skills",
+            "plugins": "_cmd_plugins",
+            "queue": "_cmd_queue",
+            "steer": "_cmd_steer",
+            "moa": "_cmd_moa",
+        }
+        delegates = {
+            "help": lambda c, _f=(lambda self, c: self.show_help()): _f(self, c),
+            "profile": lambda c, _f=(lambda self, c: self._handle_profile_command()): _f(self, c),
+            "tools": lambda c, _f=(lambda self, c: self._handle_tools_command(c)): _f(self, c),
+            "toolsets": lambda c, _f=(lambda self, c: self.show_toolsets()): _f(self, c),
+            "config": lambda c, _f=(lambda self, c: self.show_config()): _f(self, c),
+            "history": lambda c, _f=(lambda self, c: self.show_history()): _f(self, c),
+            "resume": lambda c, _f=(lambda self, c: self._handle_resume_command(c)): _f(self, c),
+            "sessions": lambda c, _f=(lambda self, c: self._handle_sessions_command(c)): _f(self, c),
+            "model": lambda c, _f=(lambda self, c: self._handle_model_switch(c)): _f(self, c),
+            "codex-runtime": lambda c, _f=(lambda self, c: self._handle_codex_runtime(c)): _f(self, c),
+            "personality": lambda c, _f=(lambda self, c: self._handle_personality_command(c)): _f(self, c),
+            "pet": lambda c, _f=(lambda self, c: self._handle_pet_command(c)): _f(self, c),
+            "hatch": lambda c, _f=(lambda self, c: self._handle_hatch_command(c)): _f(self, c),
+            "prompt": lambda c, _f=(lambda self, c: self._handle_prompt_compose_command(c)): _f(self, c),
+            "branch": lambda c, _f=(lambda self, c: self._handle_branch_command(c)): _f(self, c),
+            "save": lambda c, _f=(lambda self, c: self.save_conversation()): _f(self, c),
+            "cron": lambda c, _f=(lambda self, c: self._handle_cron_command(c)): _f(self, c),
+            "suggestions": lambda c, _f=(lambda self, c: self._handle_suggestions_command(c)): _f(self, c),
+            "blueprint": lambda c, _f=(lambda self, c: self._handle_blueprint_command(c)): _f(self, c),
+            "curator": lambda c, _f=(lambda self, c: self._handle_curator_command(c)): _f(self, c),
+            "kanban": lambda c, _f=(lambda self, c: self._handle_kanban_command(c)): _f(self, c),
+            "learn": lambda c, _f=(lambda self, c: self._handle_learn_command(c)): _f(self, c),
+            "memory": lambda c, _f=(lambda self, c: self._handle_memory_command(c)): _f(self, c),
+            "platforms": lambda c, _f=(lambda self, c: self._show_gateway_status()): _f(self, c),
+            "status": lambda c, _f=(lambda self, c: self._show_session_status()): _f(self, c),
+            "timestamps": lambda c, _f=(lambda self, c: self._handle_timestamps_command(c)): _f(self, c),
+            "verbose": lambda c, _f=(lambda self, c: self._toggle_verbose()): _f(self, c),
+            "footer": lambda c, _f=(lambda self, c: self._handle_footer_command(c)): _f(self, c),
+            "yolo": lambda c, _f=(lambda self, c: self._toggle_yolo()): _f(self, c),
+            "reasoning": lambda c, _f=(lambda self, c: self._handle_reasoning_command(c)): _f(self, c),
+            "fast": lambda c, _f=(lambda self, c: self._handle_fast_command(c)): _f(self, c),
+            "compress": lambda c, _f=(lambda self, c: self._manual_compress(c)): _f(self, c),
+            "usage": lambda c, _f=(lambda self, c: self._handle_usage_command(c)): _f(self, c),
+            "credits": lambda c, _f=(lambda self, c: self._show_credits()): _f(self, c),
+            "billing": lambda c, _f=(lambda self, c: self._show_billing(c)): _f(self, c),
+            "insights": lambda c, _f=(lambda self, c: self._show_insights(c)): _f(self, c),
+            "copy": lambda c, _f=(lambda self, c: self._handle_copy_command(c)): _f(self, c),
+            "debug": lambda c, _f=(lambda self, c: self._handle_debug_command(c)): _f(self, c),
+            "paste": lambda c, _f=(lambda self, c: self._handle_paste_command()): _f(self, c),
+            "image": lambda c, _f=(lambda self, c: self._handle_image_command(c)): _f(self, c),
+            "reload-mcp": lambda c, _f=(lambda self, c: self._confirm_and_reload_mcp(c)): _f(self, c),
+            "bundles": lambda c, _f=(lambda self, c: self._handle_bundles_command(c)): _f(self, c),
+            "browser": lambda c, _f=(lambda self, c: self._handle_browser_command(c)): _f(self, c),
+            "rollback": lambda c, _f=(lambda self, c: self._handle_rollback_command(c)): _f(self, c),
+            "snapshot": lambda c, _f=(lambda self, c: self._handle_snapshot_command(c)): _f(self, c),
+            "stop": lambda c, _f=(lambda self, c: self._handle_stop_command()): _f(self, c),
+            "agents": lambda c, _f=(lambda self, c: self._handle_agents_command()): _f(self, c),
+            "journey": lambda c, _f=(lambda self, c: self._handle_journey_command(c)): _f(self, c),
+            "background": lambda c, _f=(lambda self, c: self._handle_background_command(c)): _f(self, c),
+            "goal": lambda c, _f=(lambda self, c: self._handle_goal_command(c)): _f(self, c),
+            "subgoal": lambda c, _f=(lambda self, c: self._handle_subgoal_command(c)): _f(self, c),
+            "skin": lambda c, _f=(lambda self, c: self._handle_skin_command(c)): _f(self, c),
+            "voice": lambda c, _f=(lambda self, c: self._handle_voice_command(c)): _f(self, c),
+            "busy": lambda c, _f=(lambda self, c: self._handle_busy_command(c)): _f(self, c),
+        }
+        self._slash_tables_cache = (returning, delegates)
+        return self._slash_tables_cache
 
     @staticmethod
     def _try_launch_chrome_debug(port: int, system: str) -> bool:
