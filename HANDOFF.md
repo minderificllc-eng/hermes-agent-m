@@ -90,9 +90,12 @@ All under `docs/`:
 
 ---
 
-## 3. OPEN WORK — refactoring (Phase 1 nearly done, 2026-07-17)
+## 3. REFACTORING — essentially COMPLETE (2026-07-17)
 
-Full plan + evidence in **`docs/refactoring-opportunities.md`**.
+Full plan + evidence in **`docs/refactoring-opportunities.md`** (now
+annotated in place with what shipped and which folds were deliberately NOT
+done and why). Everything below is done except `run_conversation` steps
+(b)/(c) — see §8 for the go-forward list.
 
 **Environment is now fully wired (2026-07-17):** pyenv 3.12.0 (repo-local
 `.python-version`, untracked — CI pins 3.11) + `uv sync --locked --extra all
@@ -243,17 +246,21 @@ security/billing/behavior regression. When they differ, the right move is
 often a drift-GUARD test (child-env) or a knob-parameterized generic
 (CapabilityRegistry), not a flattening merge.
 
-Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
-`run_conversation` 4,939-line split, model-capabilities table) are scoped in
-the doc with risk notes. Threat-pattern 5-table full fold is Phase 2
-(skills_guard verdicts aren't covered test-per-verdict).
+Still unclaimed from the original audit (lower value, all optional):
+threat-pattern 5-table FULL fold (skills_guard's 118 verdicts aren't
+covered test-per-verdict — the ReDoS/INVISIBLE_CHARS drift is already
+fixed), plugin-category loader dedup, kanban per-tool schema boilerplate,
+`init_agent` phase extraction + `agent_init↔run_agent` residue,
+`browser_registry._resolve` unification into `browser_tool._get_cloud_provider`.
 
 ---
 
 ## 4. SECURITY findings (surfaced by the refactor survey)
 
-Bugs (a) and (b) below are **FIXED** (`ca27c7498`, `114d3554c` — see §3);
-(c) child-env scrub consolidation remains, Phase 2/3. Historical detail:
+ALL RESOLVED: (a) and (b) fixed (`ca27c7498`, `114d3554c`); (c) resolved
+as a cross-drift guard test, NOT a merge — see §8 trap #1. During (a)'s
+fix a THIRD instance surfaced and was closed: CDP `Page.navigate` was a
+live secret-in-URL bypass. Historical detail:
 
 **(a) Camofox navigation is missing the secret-in-URL exfil guard.**
 `tools/browser_tool.py:2705-2726` (`browser_navigate`) blocks URLs containing
@@ -338,25 +345,81 @@ export when doing bug (b).
 
 ## 7. Branch / git state
 
-- Everything is on `main`; no PR (none requested). Working tree clean.
-- 2026-07-17 session commits: `114d3554c` (cron ReDoS), `ca27c7498`
-  (browser_boundary), `414ae34bc` (truthy fold), `b258b6c7f` (stale test
-  assertions), `23209a0a0` (atomic writes), `3385a5dd3` (twin loaders),
-  plus this handoff update.
+- Everything is on `main`, pushed to `origin/main` (kept in sync commit-by-
+  commit — that's the standing policy). No PR. Working tree clean except
+  untracked `.python-version` (intentional: CI pins 3.11, local is 3.12).
+- The 2026-07-17 marathon session landed **~40 commits**: security drift
+  fixes, oracle certification (6 real macOS product bugs), `main()` +
+  `process_command` + gateway-ladder decomposition, CapabilityRegistry /
+  StopGuard / send-chunks / tts-table / provider-flows / model-capabilities
+  folds, `_finalize_turn`, `_classify_send_error`, `get_setting`, and the
+  drift-guard tests. `git log` is the authoritative record — commit
+  messages carry the full rationale including the traps avoided.
+- **Attribution policy (standing, from the human):** commits/PRs carry NO
+  Co-Authored-By or AI attribution — Minderific, LLC only. Git identity is
+  already `Minderific, LLC <minderificllc@gmail.com>`.
 
-## 8. Suggested first action for the next session
+## 8. What the next session should do
 
-Working style (per the human, 2026-07-17): **optimize for LLM development —
+Working style (per the human, standing): **optimize for LLM development —
 no sprint/milestone ceremony.** The commit log is the process; one
-verifiable fold per commit; machine-checkable state (this file, the sync
-check, `scripts/run_tests.sh`) over narrative status.
+verifiable unit per commit, pushed immediately; machine-checkable state
+(this file, `scripts/run_tests.sh`, the identity sync check in §6) over
+narrative status. On friction, build the missing support (tests, harness,
+tooling) instead of grinding. Under ambiguity, first-principles decision,
+then commit to it.
 
-Next up, in leverage order:
-1. `hermes_cli/main.py` subparser extraction (Phase 1 item 4) — mechanical,
-   continues the existing `build_*_parser` pattern, lowest-risk big win.
-2. Phase 2 folds from `docs/refactoring-opportunities.md` §4: start with
-   `CapabilityRegistry[T]` (tests pin behavior).
-3. Decision confirmed by the human (2026-07-17): **refactor in place, no
-   rewrite** — new-build only for genuinely new subsystems (self-memory
-   graph vs `../cognee`, MoE later) against existing seams
-   (`MemoryProvider`).
+### ⚠️ Negative knowledge — traps found and dodged this session (READ FIRST)
+
+Five times, the refactoring audit's "N copies → fold into 1" framing
+understated *deliberate* divergence. Each near-miss is documented at the
+site and in `docs/refactoring-opportunities.md`; do NOT re-attempt:
+
+1. **Child-env scrub merge (§2.3)** — the 3 policies are different postures
+   (code_execution is default-DROP, strictly stronger). Merging WEAKENS the
+   sandbox. Resolved with `TestProviderCredentialCrossDrift` instead.
+2. **`is_anthropic_model()` (§1.5 wire-side)** — `is_claude` vs
+   `is_anthropic_wire` are deliberately split (Kimi/Moonshot on OpenRouter
+   use Claude's cache envelope). A merge silently serves 0% cache hits and
+   re-bills every turn. Prompt-side is consolidated; wire-side is a design
+   fact, not a TODO.
+3. **§1.9 Discord "bespoke retry"** — doesn't exist; its rate-limit code
+   serves command-sync/interactions. The fix was the `_classify_send_error`
+   hook, not deletion.
+4. **§1.10 blind `get_setting` migration** — existing `os.getenv(X) or
+   cfg...` sites are FALSY-fallthrough; `get_setting` is None-based. Blind
+   replacement changes empty-string/`0`/`False` behavior. Audit per site.
+5. **`truncate_middle` fold** — the 3 implementations share ~4 lines and
+   their markers are model-visible behavior. Skipped as ceremony.
+
+Also hard-won environment/verification lessons:
+- **Tests ONLY via `scripts/run_tests.sh`** — batching files into one bare
+  pytest process yields phantom cross-file failures (75 observed).
+- **Execute real behavior, don't model it**: the `$BASHPID` fix was
+  "verified" by reasoning twice and wrong twice (bash 3.2 forks per `$()`
+  expansion); the behavioral test running real `/bin/bash` caught it.
+- ReDoS regression tests need adversarial inputs whose filler words ARE
+  alternation words; neutral filler backtracks linearly and proves nothing.
+- macOS-specific traps that keep appearing: `/tmp`→`/private/tmp` and
+  `/var`→`/private/var` realpath asymmetry; Apple SQLite ships
+  SQLITE_DBCONFIG_DEFENSIVE on; stock bash is 3.2 (no BASHPID); zombie
+  processes pass `kill(pid, 0)`.
+
+### Next work, in leverage order
+
+1. **`run_conversation` split steps (b)+(c)** — the ONE remaining
+   refactor mega-item; see §3 item 3 for the full scoping (TurnAttempt
+   extraction; recovery-cascade strategy table — arms are entangled
+   procedures, do ONE ARM AT A TIME with a provider-error repro each).
+2. **Opportunistic adoptions** (safe, unbounded backlog): `cfg_get` for
+   genuine config `.get().get()` chains; `get_setting` where a site's
+   falsy-vs-None intent is confirmed; `model_capabilities()` for any new
+   prompt-side family checks.
+3. **The actual north star**: with the refactor substrate clean, the next
+   frontier is the **self-memory graph** (cognee-inspired; source at
+   `../cognee`, eval in `docs/cognee-ideas-evaluation.md`, pilot path =
+   `plugins/memory/cognee/` behind the existing `MemoryProvider` seam) and
+   later the human's MoE integration (other Minderific repos — do not
+   infer its design from this one).
+4. Decision confirmed by the human: **refactor in place, no rewrite** —
+   new-build only for genuinely new subsystems against existing seams.
