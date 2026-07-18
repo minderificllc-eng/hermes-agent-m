@@ -1635,6 +1635,20 @@ class DiscordAdapter(BasePlatformAdapter):
             return True
         return False
 
+    def _classify_send_error(self, exc: BaseException):
+        """Discord override: surface the API's authoritative Retry-After.
+
+        discord.py raises structured 429s (``RateLimited`` / status-429
+        ``HTTPException``); reuse the same detectors the command-sync path
+        uses so a rate-limited message send produces a retryable SendResult
+        carrying Discord's server retry-after, which ``_send_with_retry``
+        then honors over its default backoff. Non-429 errors fall back to the
+        base string-based classification.
+        """
+        if self._is_discord_rate_limit(exc):
+            return (True, self._extract_discord_retry_after(exc))
+        return super()._classify_send_error(exc)
+
     @staticmethod
     def _is_discord_unknown_interaction(exc: BaseException) -> bool:
         """True for Discord's expired interaction token error."""
@@ -2099,7 +2113,11 @@ class DiscordAdapter(BasePlatformAdapter):
 
         except Exception as e:  # pragma: no cover - defensive logging
             logger.error("[%s] Failed to send Discord message: %s", self.name, e, exc_info=True)
-            return SendResult(success=False, error=str(e))
+            retryable, retry_after = self._classify_send_error(e)
+            return SendResult(
+                success=False, error=str(e),
+                retryable=retryable, retry_after=retry_after,
+            )
 
     async def _send_to_forum(self, forum_channel: Any, content: str) -> SendResult:
         """Create a thread post in a forum channel with the message as starter content.

@@ -4059,6 +4059,22 @@ class BasePlatformAdapter(ABC):
         lowered = error.lower()
         return any(pat in lowered for pat in _RETRYABLE_ERROR_PATTERNS)
 
+    def _classify_send_error(self, exc: BaseException) -> Tuple[bool, Optional[float]]:
+        """Map a send exception to ``(retryable, server_retry_after)``.
+
+        Shared classification hook so every adapter's ``send()`` populates a
+        failed :class:`SendResult` the same way — ``retryable`` drives
+        :meth:`_send_with_retry`, ``server_retry_after`` (seconds) overrides
+        its backoff. The default is the string-based heuristic
+        (:meth:`_is_retryable_error`) with no server retry-after, matching the
+        pre-hook behavior. Adapters whose SDK raises structured 429 errors
+        (Discord's ``RateLimited`` / ``HTTPException``) override this to
+        surface the API's authoritative ``Retry-After``; this is deliberately
+        NOT a duplicate of the command-sync/interaction rate-limit handling,
+        which operates on raw SDK exceptions outside the SendResult path.
+        """
+        return (self._is_retryable_error(str(exc)), None)
+
     @staticmethod
     def _is_timeout_error(error: Optional[str]) -> bool:
         """Return True if the error string indicates a read/write timeout.
