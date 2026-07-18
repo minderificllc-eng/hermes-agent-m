@@ -508,6 +508,25 @@ def is_malformed_db_error(exc: BaseException) -> bool:
     return any(marker in str(exc).lower() for marker in _MALFORMED_SCHEMA_MARKERS)
 
 
+def _schema_surgery_connection(db_path: Path) -> sqlite3.Connection:
+    """Open a connection able to modify ``sqlite_master`` directly.
+
+    ``PRAGMA writable_schema=ON`` alone is no longer sufficient on SQLite
+    builds with SQLITE_DBCONFIG_DEFENSIVE enabled by default (Apple's system
+    library, some recent builds) — sqlite_master writes fail with
+    "table sqlite_master may not be modified" and every repair strategy
+    silently degrades. Disable defensive mode where the binding exposes the
+    knob (Python >= 3.12); elsewhere the connection behaves as before.
+    """
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    if hasattr(conn, "setconfig") and hasattr(sqlite3, "SQLITE_DBCONFIG_DEFENSIVE"):
+        try:
+            conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, False)
+        except Exception:
+            pass
+    return conn
+
+
 def _claim_repair_attempt(db_path: Path) -> bool:
     """Claim the one-shot repair attempt for *db_path* in this process.
 
@@ -681,7 +700,7 @@ def repair_state_db_schema(db_path: Path, *, backup: bool = True) -> Dict[str, A
 
     # ── Strategy 1: de-duplicate sqlite_master (keeps FTS index) ──
     try:
-        conn = sqlite3.connect(str(db_path), isolation_level=None)
+        conn = _schema_surgery_connection(db_path)
         try:
             conn.execute("PRAGMA writable_schema=ON")
             dupes = conn.execute(
@@ -711,7 +730,7 @@ def repair_state_db_schema(db_path: Path, *, backup: bool = True) -> Dict[str, A
 
     # ── Strategy 2: drop all FTS schema, VACUUM, rebuild on next open ──
     try:
-        conn = sqlite3.connect(str(db_path), isolation_level=None)
+        conn = _schema_surgery_connection(db_path)
         try:
             conn.execute("PRAGMA writable_schema=ON")
             conn.execute("DELETE FROM sqlite_master WHERE name LIKE 'messages_fts%'")

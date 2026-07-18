@@ -43,6 +43,12 @@ def _corrupt_duplicate_fts(db_path: Path) -> None:
     messages_fts already exists'.
     """
     conn = sqlite3.connect(str(db_path))
+    # Some SQLite builds (notably Apple's) enable SQLITE_DBCONFIG_DEFENSIVE
+    # by default, which blocks sqlite_master writes even under
+    # writable_schema=ON. Turn it off where the binding exposes the knob
+    # (Python >= 3.12) so this corruption simulation works everywhere.
+    if hasattr(conn, "setconfig") and hasattr(sqlite3, "SQLITE_DBCONFIG_DEFENSIVE"):
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, False)
     conn.execute("PRAGMA writable_schema=ON")
     conn.execute(
         "INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) "
@@ -270,7 +276,8 @@ def _corrupt_fts_index_data(db_path: Path) -> None:
     inverted index for FTS5 table" failure that fires on writes through the
     triggers while base-table reads still return rows.
     """
-    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    from hermes_state import _schema_surgery_connection
+    conn = _schema_surgery_connection(db_path)
     conn.execute("UPDATE messages_fts_data SET block = X'DEADBEEFDEADBEEF'")
     conn.close()
 
