@@ -776,6 +776,26 @@ async def _send_via_adapter(
     }
 
 
+async def _send_chunks(chunks, media_files, send_one, *, empty_media):
+    """Deliver ``chunks`` in order, attaching ``media_files`` only on the last.
+
+    The per-platform media arms all shared this loop: send each text chunk,
+    put the media on the final chunk (so it arrives once, after the text),
+    bail out on the first error dict, and return the last successful result.
+    ``send_one(chunk, media)`` is the platform's send closure; ``empty_media``
+    is the "no media this chunk" sentinel — ``[]`` for platforms whose sender
+    takes a list, ``None`` for those whose sender takes an optional.
+    """
+    last_result = None
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        result = await send_one(chunk, media_files if is_last else empty_media)
+        if isinstance(result, dict) and result.get("error"):
+            return result
+        last_result = result
+    return last_result
+
+
 async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None, force_document=False):
     """Route a message to the appropriate platform sender.
 
@@ -890,20 +910,13 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             if isinstance(result, dict) and result.get("error"):
                 return result
             return result
-        last_result = None
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await entry.standalone_sender_fn(
-                pconfig,
-                chat_id,
-                chunk,
-                thread_id=thread_id,
-                media_files=media_files if is_last else [],
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: entry.standalone_sender_fn(
+                pconfig, chat_id, chunk, thread_id=thread_id, media_files=media,
+            ),
+            empty_media=[],
+        )
 
     # --- Matrix: route ALL sends through the native adapter so text is
     # encrypted in E2EE rooms too (issue: text-only sends arrived with a red
@@ -911,51 +924,29 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     # reuses the live gateway's E2EE session when available (#46310) and falls
     # back to an encryption-aware ephemeral adapter for standalone/cron. ---
     if platform == Platform.MATRIX:
-        last_result = None
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await _send_matrix_via_adapter(
-                pconfig,
-                chat_id,
-                chunk,
-                media_files=media_files if is_last else [],
-                thread_id=thread_id,
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: _send_matrix_via_adapter(
+                pconfig, chat_id, chunk, media_files=media, thread_id=thread_id,
+            ),
+            empty_media=[],
+        )
 
     # --- Signal: native attachment support via JSON-RPC attachments param ---
     if platform == Platform.SIGNAL and media_files:
-        last_result = None
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await _send_signal(
-                pconfig.extra,
-                chat_id,
-                chunk,
-                media_files=media_files if is_last else [],
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: _send_signal(pconfig.extra, chat_id, chunk, media_files=media),
+            empty_media=[],
+        )
 
     # --- Yuanbao: native media attachment support via running gateway adapter ---
     if platform == Platform.YUANBAO and media_files:
-        last_result = None
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await _send_yuanbao(
-                chat_id,
-                chunk,
-                media_files=media_files if is_last else None,
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: _send_yuanbao(chat_id, chunk, media_files=media),
+            empty_media=None,
+        )
 
     # --- Feishu: native media attachment support via the registry's
     # standalone_sender_fn (plugins/platforms/feishu/adapter.py::_standalone_send). #41112
@@ -966,20 +957,13 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
         _feishu_entry = _pr_feishu.get("feishu")
         if _feishu_entry is None or _feishu_entry.standalone_sender_fn is None:
             return {"error": "Feishu plugin not registered or missing standalone_sender_fn"}
-        last_result = None
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await _feishu_entry.standalone_sender_fn(
-                pconfig,
-                chat_id,
-                chunk,
-                media_files=media_files if is_last else None,
-                thread_id=thread_id,
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: _feishu_entry.standalone_sender_fn(
+                pconfig, chat_id, chunk, media_files=media, thread_id=thread_id,
+            ),
+            empty_media=None,
+        )
 
     # --- WhatsApp: native media attachment support via the registry's
     # standalone_sender_fn (plugins/platforms/whatsapp/adapter.py::_standalone_send).
@@ -1000,7 +984,6 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             message, media_files,
             max_caption_len=(max_len or _DEFAULT_CAPTION_LIMIT),
         )
-        last_result = None
         if _wa_caption is not None:
             # Single-file captioned send: no separate text chunk, caption on
             # the media itself.
@@ -1016,20 +999,14 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             if isinstance(result, dict) and result.get("error"):
                 return result
             return result
-        for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
-            result = await _wa_entry.standalone_sender_fn(
-                pconfig,
-                chat_id,
-                chunk,
-                media_files=media_files if is_last else None,
-                thread_id=thread_id,
-                force_document=force_document,
-            )
-            if isinstance(result, dict) and result.get("error"):
-                return result
-            last_result = result
-        return last_result
+        return await _send_chunks(
+            chunks, media_files,
+            lambda chunk, media: _wa_entry.standalone_sender_fn(
+                pconfig, chat_id, chunk, media_files=media,
+                thread_id=thread_id, force_document=force_document,
+            ),
+            empty_media=None,
+        )
 
     # --- Non-media platforms ---
     if media_files and not message.strip():
