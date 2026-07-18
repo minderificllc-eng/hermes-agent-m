@@ -65,7 +65,9 @@ _SENSITIVE_BODY_KEYS = frozenset({
 # cli.py) or `HERMES_REDACT_SECRETS=false` in ~/.hermes/.env. An opt-out
 # warning is logged at gateway and CLI startup so operators see the
 # downgrade — see `_log_redaction_status()` in gateway/run.py and cli.py.
-_REDACT_ENABLED = os.getenv("HERMES_REDACT_SECRETS", "true").lower() in {"1", "true", "yes", "on"}
+from utils import is_truthy_value as _is_truthy_value
+
+_REDACT_ENABLED = _is_truthy_value(os.getenv("HERMES_REDACT_SECRETS"), default=True)
 
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [

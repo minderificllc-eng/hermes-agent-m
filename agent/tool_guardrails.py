@@ -453,10 +453,14 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
+        from utils import FALSY_STRINGS, TRUTHY_STRINGS
+
+        # "enabled"/"disabled" are accepted here on top of the canonical
+        # sets — guardrail config predates the shared helper.
         lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on", "enabled"}:
+        if lowered in TRUTHY_STRINGS or lowered == "enabled":
             return True
-        if lowered in {"0", "false", "no", "off", "disabled"}:
+        if lowered in FALSY_STRINGS or lowered == "disabled":
             return False
     return default
 

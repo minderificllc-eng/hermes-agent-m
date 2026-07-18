@@ -144,9 +144,11 @@ def verify_on_stop_enabled(config: dict[str, Any] | None = None) -> bool:
     bool forces the behavior in either direction. A missing or unrecognized
     value falls back to the surface-aware ``"auto"`` default.
     """
+    from utils import FALSY_STRINGS, TRUTHY_STRINGS, is_falsy_value
+
     env = os.environ.get("HERMES_VERIFY_ON_STOP")
     if env is not None:
-        return env.strip().lower() not in {"0", "false", "no", "off"}
+        return not is_falsy_value(env)
     if config is None:
         try:
             from hermes_cli.config import load_config
@@ -160,9 +162,9 @@ def verify_on_stop_enabled(config: dict[str, Any] | None = None) -> bool:
         return cfg_val
     if isinstance(cfg_val, str):
         token = cfg_val.strip().lower()
-        if token in {"1", "true", "yes", "on"}:
+        if token in TRUTHY_STRINGS:
             return True
-        if token in {"0", "false", "no", "off"}:
+        if token in FALSY_STRINGS:
             return False
         if token == "auto":
             return not _session_is_messaging_surface()

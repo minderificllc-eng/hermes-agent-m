@@ -22,11 +22,9 @@ _CA_BUNDLE_ENV_VARS = (
     "CURL_CA_BUNDLE",
 )
 
-_SKIP_VALUES = {"1", "true", "yes", "on"}
-
-
 def _skip_ssl_guard_enabled() -> bool:
-    return os.getenv("HERMES_SKIP_SSL_GUARD", "").strip().lower() in _SKIP_VALUES
+    from utils import is_truthy_value
+    return is_truthy_value(os.getenv("HERMES_SKIP_SSL_GUARD"))
 
 
 def _repair_hint() -> str:

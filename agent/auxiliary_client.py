@@ -544,8 +544,8 @@ _OR_HEADERS_BASE = {
     "X-OpenRouter-Categories": "productivity,cli-agent",
 }
 
-# Truthy values for boolean env-var parsing.
-_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+# Truthy values for boolean env-var parsing (canonical set from utils).
+from utils import TRUTHY_STRINGS as _TRUTHY_ENV_VALUES
 
 
 def _apply_user_default_headers(headers: dict | None) -> dict | None:

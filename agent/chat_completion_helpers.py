@@ -525,9 +525,8 @@ def interruptible_api_call(agent, api_kwargs: dict):
         _ttfb_enabled = False
     elif _openai_codex_backend:
         _ttfb_disable_above = _env_float("HERMES_CODEX_TTFB_DISABLE_ABOVE_TOKENS", 10_000.0)
-        _ttfb_strict = os.environ.get("HERMES_CODEX_TTFB_STRICT", "").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
+        from utils import is_truthy_value
+        _ttfb_strict = is_truthy_value(os.environ.get("HERMES_CODEX_TTFB_STRICT"))
         if (
             not _ttfb_strict
             and _ttfb_disable_above > 0

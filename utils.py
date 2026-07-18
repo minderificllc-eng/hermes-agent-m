@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+FALSY_STRINGS = frozenset({"0", "false", "no", "off"})
 
 
 def is_truthy_value(value: Any, default: bool = False) -> bool:
@@ -28,6 +29,20 @@ def is_truthy_value(value: Any, default: bool = False) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in TRUTHY_STRINGS
     return bool(value)
+
+
+def is_falsy_value(value: Any) -> bool:
+    """Return True only for an EXPLICIT opt-out value ("0"/"false"/"no"/"off").
+
+    Not the negation of ``is_truthy_value``: default-on settings must stay on
+    for missing or unrecognized values and turn off only on an explicit no —
+    use this for those, e.g. ``enabled = not is_falsy_value(env)``.
+    """
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, str):
+        return value.strip().lower() in FALSY_STRINGS
+    return False
 
 
 def env_var_enabled(name: str, default: str = "") -> bool:

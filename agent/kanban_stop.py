@@ -28,8 +28,8 @@ def kanban_stop_nudge_enabled() -> bool:
     On when ``HERMES_KANBAN_TASK`` is set (dispatcher-spawned worker), unless
     ``HERMES_KANBAN_STOP_NUDGE`` explicitly disables it.
     """
-    env = os.environ.get("HERMES_KANBAN_STOP_NUDGE")
-    if env is not None and env.strip().lower() in {"0", "false", "no", "off"}:
+    from utils import is_falsy_value
+    if is_falsy_value(os.environ.get("HERMES_KANBAN_STOP_NUDGE")):
         return False
     task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
     return bool(task)

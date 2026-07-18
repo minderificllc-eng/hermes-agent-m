@@ -156,8 +156,8 @@ def extract_image_refs(text: str) -> Tuple[List[str], List[str]]:
 # handle it. Accept only the values YAML 1.1 / 1.2 treat as booleans, plus
 # real ``bool`` and integer 0/1. Anything else returns None so the caller
 # falls through to models.dev rather than honouring garbage.
-_TRUE_TOKENS = frozenset({"true", "yes", "on", "1"})
-_FALSE_TOKENS = frozenset({"false", "no", "off", "0"})
+from utils import FALSY_STRINGS as _FALSE_TOKENS
+from utils import TRUTHY_STRINGS as _TRUE_TOKENS
 
 
 def _coerce_capability_bool(raw: Any) -> Optional[bool]:
