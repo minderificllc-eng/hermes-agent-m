@@ -436,6 +436,20 @@ def test_s6_manager_kind_and_supports_registration() -> None:
 # tests/docker/test_s6_profile_gateway_integration.py.
 
 
+def _event_dir_modes() -> set:
+    """Acceptable modes for the seeded 03730 event/ dirs.
+
+    macOS silently clears the setgid bit on a directory whose group the
+    caller is not a member of (POSIX allows this; pytest tmpdirs under
+    /private/tmp are group wheel), so the 03730 skeleton stats back as
+    01730 there. The setgid bit only matters inside the s6 Linux
+    container where seeding actually runs, so tolerate exactly that
+    stripped form on darwin and nothing else.
+    """
+    import sys
+    return {0o3730, 0o1730} if sys.platform == "darwin" else {0o3730}
+
+
 def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     """Verifies the dirs + FIFO + modes the helper lays down."""
     import stat
@@ -450,7 +464,7 @@ def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     # Top-level event/ — s6-svlisten1 event subscription dir.
     event = svc_dir / "event"
     assert event.is_dir(), "missing top-level event/"
-    assert stat.S_IMODE(event.stat().st_mode) == 0o3730, (
+    assert stat.S_IMODE(event.stat().st_mode) in _event_dir_modes(), (
         f"event/ mode = {oct(event.stat().st_mode)}, want 03730"
     )
 
@@ -462,7 +476,7 @@ def test_seed_supervise_skeleton_creates_expected_layout(tmp_path) -> None:
     # supervise/event/.
     supervise_event = supervise / "event"
     assert supervise_event.is_dir(), "missing supervise/event/"
-    assert stat.S_IMODE(supervise_event.stat().st_mode) == 0o3730
+    assert stat.S_IMODE(supervise_event.stat().st_mode) in _event_dir_modes()
 
     # supervise/control FIFO.
     control = supervise / "control"
@@ -497,7 +511,7 @@ def test_seed_supervise_skeleton_handles_log_subservice(tmp_path) -> None:
     log_control = log_supervise / "control"
 
     assert log_event.is_dir()
-    assert stat.S_IMODE(log_event.stat().st_mode) == 0o3730
+    assert stat.S_IMODE(log_event.stat().st_mode) in _event_dir_modes()
     assert log_supervise.is_dir()
     assert log_supervise_event.is_dir()
     assert log_control.exists() and stat.S_ISFIFO(log_control.stat().st_mode)
