@@ -6692,6 +6692,44 @@ def cfg_get(cfg: Optional[Dict[str, Any]], *keys: str, default: Any = None) -> A
     return node
 
 
+def get_setting(
+    cfg: Optional[Dict[str, Any]],
+    *keys: str,
+    env: Optional[str] = None,
+    default: Any = None,
+    env_wins: bool = True,
+) -> Any:
+    """Resolve a setting from an env var and/or a nested config key.
+
+    Canonical helper for the "env var OR config key" idiom that is
+    hand-written dozens of times with *inconsistent* precedence. Make the
+    precedence explicit per call:
+
+    - ``env_wins=True`` (default): the env var overrides config when set —
+      the common runtime-override case (``HERMES_X`` beats ``config.yaml``).
+    - ``env_wins=False``: config wins; the env var is only a fallback.
+
+    "Set" for the env var means present and non-empty (``os.getenv`` returns
+    ``None`` when absent; an empty string is treated as unset so an exported-
+    but-blank var doesn't shadow a real config value). Config presence uses
+    :func:`cfg_get` semantics (missing/non-dict intermediates → fall through).
+
+    Returns ``default`` only when neither source provides a value.
+    """
+    env_val = os.getenv(env) if env else None
+    if env_val == "":
+        env_val = None
+    cfg_val = cfg_get(cfg, *keys) if keys else None
+
+    if env_wins:
+        if env_val is not None:
+            return env_val
+        return cfg_val if cfg_val is not None else default
+    else:
+        if cfg_val is not None:
+            return cfg_val
+        return env_val if env_val is not None else default
+
 
 def read_raw_config() -> Dict[str, Any]:
     """Read ~/.hermes/config.yaml as-is, without merging defaults or migrating.
