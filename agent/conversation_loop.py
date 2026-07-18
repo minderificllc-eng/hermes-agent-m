@@ -79,6 +79,27 @@ logger = logging.getLogger(__name__)
 INTERRUPT_WAITING_FOR_MODEL_PREFIX = "Operation interrupted: waiting for model response ("
 
 
+def _finalize_turn(final_response, messages, api_calls, completed, **extra):
+    """Build a run_conversation return payload.
+
+    Every one of run_conversation's ~23 exits returns a dict sharing the same
+    four core keys — ``final_response``, ``messages``, ``api_calls``,
+    ``completed`` — plus an exit-specific set of flags (``partial``, ``error``,
+    ``failed``, ``interrupted``, ``compression_exhausted``,
+    ``compaction_disabled``, ``failure_reason``, …). This helper centralizes
+    the core shape so adding/renaming a core key is one edit, while ``**extra``
+    preserves each exit's EXACT key set — a caller that distinguishes an absent
+    flag from ``False`` keeps seeing exactly the keys that exit passed.
+    """
+    return {
+        "final_response": final_response,
+        "messages": messages,
+        "api_calls": api_calls,
+        "completed": completed,
+        **extra,
+    }
+
+
 def _apply_stop_guard(
     agent: Any,
     messages: list,
@@ -1185,19 +1206,10 @@ def run_conversation(
                         # so user sees the rate-limit message that led here.
                         agent._flush_status_buffer()
                         agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": (
-                                f"⏳ {_nous_msg}\n\n"
+                        return _finalize_turn(f"⏳ {_nous_msg}\n\n"
                                 "No fallback provider available. "
                                 "Try again after the reset, or add a "
-                                "fallback provider in config.yaml."
-                            ),
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": _nous_msg,
-                        }
+                                "fallback provider in config.yaml.", messages, api_call_count, False, failed=True, error=_nous_msg)
                 except ImportError:
                     pass
                 except Exception:
@@ -1616,14 +1628,7 @@ def run_conversation(
                         logger.error(f"{agent.log_prefix}Invalid API response after {max_retries} retries.")
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Invalid API response after {max_retries} retries: {_failure_hint}"
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "failed": True  # Mark as failure for filtering
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, failed=True)
                     
                     # Backoff before retry — jittered exponential: 5s base, 120s cap
                     wait_time = jittered_backoff(retry_count, base_delay=5.0, max_delay=120.0)
@@ -1640,13 +1645,7 @@ def run_conversation(
                             close_interrupted_tool_sequence(messages, _interrupt_text)
                             agent._persist_session(messages, conversation_history)
                             agent.clear_interrupt()
-                            return {
-                                "final_response": _interrupt_text,
-                                "messages": messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "interrupted": True,
-                            }
+                            return _finalize_turn(_interrupt_text, messages, api_call_count, False, interrupted=True)
                         time.sleep(0.2)
                         # Touch activity every ~30s so the gateway's inactivity
                         # monitor knows we're alive during backoff waits.
@@ -1890,14 +1889,7 @@ def run_conversation(
                         )
                         agent._cleanup_task_resources(effective_task_id)
                         agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": _exhaust_response,
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "partial": True,
-                            "error": _exhaust_error,
-                        }
+                        return _finalize_turn(_exhaust_response, messages, api_call_count, False, partial=True, error=_exhaust_error)
 
                     if agent.api_mode in {"chat_completions", "bedrock_converse", "anthropic_messages"}:
                         assistant_message = _trunc_msg
@@ -2001,14 +1993,7 @@ def run_conversation(
                             partial_response = agent._strip_think_blocks("".join(truncated_response_parts)).strip()
                             agent._cleanup_task_resources(effective_task_id)
                             agent._persist_session(messages, conversation_history)
-                            return {
-                                "final_response": partial_response or None,
-                                "messages": messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": "Response remained truncated after 4 continuation attempts",
-                            }
+                            return _finalize_turn(partial_response or None, messages, api_call_count, False, partial=True, error="Response remained truncated after 4 continuation attempts")
 
                     if agent.api_mode in {"chat_completions", "bedrock_converse", "anthropic_messages"}:
                         assistant_message = _trunc_msg
@@ -2067,14 +2052,7 @@ def run_conversation(
                                 if _is_stub_stall
                                 else "Response truncated due to output length limit"
                             )
-                            return {
-                                "final_response": _final_response,
-                                "messages": messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": _final_response,
-                            }
+                            return _finalize_turn(_final_response, messages, api_call_count, False, partial=True, error=_final_response)
 
                     # If we have prior messages, roll back to last complete state
                     if len(messages) > 1:
@@ -2084,27 +2062,13 @@ def run_conversation(
                         agent._cleanup_task_resources(effective_task_id)
                         agent._persist_session(messages, conversation_history)
 
-                        return {
-                            "final_response": "Response truncated due to output length limit",
-                            "messages": rolled_back_messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "partial": True,
-                            "error": "Response truncated due to output length limit"
-                        }
+                        return _finalize_turn("Response truncated due to output length limit", rolled_back_messages, api_call_count, False, partial=True, error="Response truncated due to output length limit")
                     else:
                         # First message was truncated - mark as failed
                         agent._flush_status_buffer()
                         agent._vprint(f"{agent.log_prefix}❌ First response truncated - cannot recover", force=True)
                         agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": "First response truncated due to output length limit",
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": "First response truncated due to output length limit"
-                        }
+                        return _finalize_turn("First response truncated due to output length limit", messages, api_call_count, False, failed=True, error="First response truncated due to output length limit")
                 
                 # Track actual token usage from response for context management
                 if hasattr(response, 'usage') and response.usage:
@@ -3082,13 +3046,7 @@ def run_conversation(
                     close_interrupted_tool_sequence(messages, _interrupt_text)
                     agent._persist_session(messages, conversation_history)
                     agent.clear_interrupt()
-                    return {
-                        "final_response": _interrupt_text,
-                        "messages": messages,
-                        "api_calls": api_call_count,
-                        "completed": False,
-                        "interrupted": True,
-                    }
+                    return _finalize_turn(_interrupt_text, messages, api_call_count, False, interrupted=True)
                 
                 # Check for 413 payload-too-large BEFORE generic 4xx handler.
                 # A 413 is a payload-size error — the correct response is to
@@ -3151,16 +3109,7 @@ def run_conversation(
                         "(compression.enabled: false). Run /compress to compact manually, "
                         "/new to start fresh, or switch to a larger-context model."
                     )
-                    return {
-                        "final_response": _final_response,
-                        "messages": messages,
-                        "completed": False,
-                        "api_calls": api_call_count,
-                        "error": _final_response,
-                        "partial": True,
-                        "failed": True,
-                        "compaction_disabled": True,
-                    }
+                    return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compaction_disabled=True)
 
                 # ── Anthropic Sonnet long-context tier gate ───────────
                 # Anthropic returns HTTP 429 "Extra usage is required for
@@ -3441,16 +3390,7 @@ def run_conversation(
                         logger.error(f"{agent.log_prefix}413 compression failed after {max_compression_attempts} attempts.")
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Request payload too large: max compression attempts ({max_compression_attempts}) reached."
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "partial": True,
-                            "failed": True,
-                            "compression_exhausted": True,
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compression_exhausted=True)
                     agent._buffer_status(f"⚠️  Request payload too large (413) — compression attempt {compression_attempts}/{max_compression_attempts}...")
 
                     original_len = len(messages)
@@ -3497,16 +3437,7 @@ def run_conversation(
                         logger.error(f"{agent.log_prefix}413 payload too large. Cannot compress further.")
                         agent._persist_session(messages, conversation_history)
                         _final_response = "Request payload too large (413). Cannot compress further."
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "partial": True,
-                            "failed": True,
-                            "compression_exhausted": True,
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compression_exhausted=True)
 
                 # Check for context-length errors BEFORE generic 4xx handler.
                 # The classifier detects context overflow from: explicit error
@@ -3570,16 +3501,7 @@ def run_conversation(
                             logger.error(f"{agent.log_prefix}Context compression failed after {max_compression_attempts} attempts.")
                             agent._persist_session(messages, conversation_history)
                             _final_response = f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached."
-                            return {
-                                "final_response": _final_response,
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": api_call_count,
-                                "error": _final_response,
-                                "partial": True,
-                                "failed": True,
-                                "compression_exhausted": True,
-                            }
+                            return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compression_exhausted=True)
                         _retry.restart_with_compressed_messages = True
                         break
 
@@ -3614,15 +3536,7 @@ def run_conversation(
                             "max_tokens exceeds the provider's output cap for this model. "
                             "Lower model.max_tokens in config.yaml."
                         )
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "partial": True,
-                            "failed": True,
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True)
 
                     # Error is about the INPUT being too large.  Only reduce
                     # context_length when the provider explicitly reports the
@@ -3682,16 +3596,7 @@ def run_conversation(
                         logger.error(f"{agent.log_prefix}Context compression failed after {max_compression_attempts} attempts.")
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached."
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "partial": True,
-                            "failed": True,
-                            "compression_exhausted": True,
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compression_exhausted=True)
                     agent._buffer_status(f"🗜️ Context too large (~{approx_tokens:,} tokens) — compressing ({compression_attempts}/{max_compression_attempts})...")
 
                     original_len = len(messages)
@@ -3727,16 +3632,7 @@ def run_conversation(
                         logger.error(f"{agent.log_prefix}Context length exceeded: {new_tokens:,} tokens. Cannot compress further.")
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Context length exceeded ({new_tokens:,} tokens). Cannot compress further."
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "completed": False,
-                            "api_calls": api_call_count,
-                            "error": _final_response,
-                            "partial": True,
-                            "failed": True,
-                            "compression_exhausted": True,
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, error=_final_response, partial=True, failed=True, compression_exhausted=True)
 
                 # Check for non-retryable client errors.  The classifier
                 # already accounts for 413, 429, 529 (transient), context
@@ -3991,14 +3887,7 @@ def run_conversation(
                             final_response=_policy_response,
                             error_detail=_nonretryable_summary,
                         )
-                    return {
-                        "final_response": _nonretryable_summary,
-                        "messages": messages,
-                        "api_calls": api_call_count,
-                        "completed": False,
-                        "failed": True,
-                        "error": _nonretryable_summary,
-                    }
+                    return _finalize_turn(_nonretryable_summary, messages, api_call_count, False, failed=True, error=_nonretryable_summary)
 
                 if retry_count >= max_retries:
                     # Before falling back, try rebuilding the primary
@@ -4181,20 +4070,7 @@ def run_conversation(
                             "execute_code with Python's open() for large "
                             "files, or to write in smaller sections."
                         )
-                    return {
-                        "final_response": _final_response,
-                        "messages": messages,
-                        "api_calls": api_call_count,
-                        "completed": False,
-                        "failed": True,
-                        "error": _final_summary,
-                        # Surface the classified reason so callers (notably the
-                        # kanban worker path in cli.py) can distinguish a
-                        # transient throttle from a real failure and choose a
-                        # different exit code. ``rate_limit`` / ``billing`` here
-                        # mean "quota wall, not a task error".
-                        "failure_reason": classified.reason.value,
-                    }
+                    return _finalize_turn(_final_response, messages, api_call_count, False, failed=True, error=_final_summary, failure_reason=classified.reason.value)
 
                 # For rate limits, respect the Retry-After header if present
                 _retry_after = None
@@ -4259,13 +4135,7 @@ def run_conversation(
                         close_interrupted_tool_sequence(messages, _interrupt_text)
                         agent._persist_session(messages, conversation_history)
                         agent.clear_interrupt()
-                        return {
-                            "final_response": _interrupt_text,
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "interrupted": True,
-                        }
+                        return _finalize_turn(_interrupt_text, messages, api_call_count, False, interrupted=True)
                     time.sleep(0.2)  # Check interrupt every 200ms
                     # Touch activity every ~30s so the gateway's inactivity
                     # monitor knows we're alive during backoff waits.
@@ -4450,14 +4320,7 @@ def run_conversation(
                     agent._cleanup_task_resources(effective_task_id)
                     agent._persist_session(messages, conversation_history)
                     
-                    return {
-                        "final_response": "Incomplete REASONING_SCRATCHPAD after 2 retries",
-                        "messages": rolled_back_messages,
-                        "api_calls": api_call_count,
-                        "completed": False,
-                        "partial": True,
-                        "error": "Incomplete REASONING_SCRATCHPAD after 2 retries"
-                    }
+                    return _finalize_turn("Incomplete REASONING_SCRATCHPAD after 2 retries", rolled_back_messages, api_call_count, False, partial=True, error="Incomplete REASONING_SCRATCHPAD after 2 retries")
             
             # Reset incomplete scratchpad counter on clean response
             agent._incomplete_scratchpad_retries = 0
@@ -4510,14 +4373,7 @@ def run_conversation(
 
                 agent._codex_incomplete_retries = 0
                 agent._persist_session(messages, conversation_history)
-                return {
-                    "final_response": "Codex response remained incomplete after 3 continuation attempts",
-                    "messages": messages,
-                    "api_calls": api_call_count,
-                    "completed": False,
-                    "partial": True,
-                    "error": "Codex response remained incomplete after 3 continuation attempts",
-                }
+                return _finalize_turn("Codex response remained incomplete after 3 continuation attempts", messages, api_call_count, False, partial=True, error="Codex response remained incomplete after 3 continuation attempts")
             elif hasattr(agent, "_codex_incomplete_retries"):
                 agent._codex_incomplete_retries = 0
             
@@ -4558,14 +4414,7 @@ def run_conversation(
                         agent._invalid_tool_retries = 0
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Model generated invalid tool call: {invalid_preview}"
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "partial": True,
-                            "error": _final_response
-                        }
+                        return _finalize_turn(_final_response, messages, api_call_count, False, partial=True, error=_final_response)
 
                     assistant_msg = agent._build_assistant_message(assistant_message, finish_reason)
                     messages.append(assistant_msg)
@@ -4647,14 +4496,7 @@ def run_conversation(
                         agent._invalid_json_retries = 0
                         agent._cleanup_task_resources(effective_task_id)
                         agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": "Response truncated due to output length limit",
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "partial": True,
-                            "error": "Response truncated due to output length limit",
-                        }
+                        return _finalize_turn("Response truncated due to output length limit", messages, api_call_count, False, partial=True, error="Response truncated due to output length limit")
 
                     # Track retries for invalid JSON arguments
                     agent._invalid_json_retries += 1
