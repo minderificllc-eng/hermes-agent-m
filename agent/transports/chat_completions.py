@@ -13,7 +13,8 @@ from typing import Any, Dict
 
 from agent.lmstudio_reasoning import resolve_lmstudio_effort
 from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
-from agent.prompt_builder import DEVELOPER_ROLE_MODELS
+from agent.prompt_builder import DEVELOPER_ROLE_MODELS  # noqa: F401 (kept for back-compat re-export)
+from agent.model_capabilities import model_capabilities
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall, Usage
 
@@ -347,7 +348,7 @@ class ChatCompletionsTransport(ProviderTransport):
             sanitized
             and isinstance(sanitized[0], dict)
             and sanitized[0].get("role") == "system"
-            and any(p in model_lower for p in DEVELOPER_ROLE_MODELS)
+            and model_capabilities(model).developer_role
         ):
             sanitized = list(sanitized)
             sanitized[0] = {**sanitized[0], "role": "developer"}
@@ -525,7 +526,7 @@ class ChatCompletionsTransport(ProviderTransport):
             sanitized
             and isinstance(sanitized[0], dict)
             and sanitized[0].get("role") == "system"
-            and any(p in _model_lower for p in DEVELOPER_ROLE_MODELS)
+            and model_capabilities(model).developer_role
         ):
             sanitized = list(sanitized)
             sanitized[0] = {**sanitized[0], "role": "developer"}

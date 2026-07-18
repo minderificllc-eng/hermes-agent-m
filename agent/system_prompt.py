@@ -272,22 +272,24 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             model_lower = (agent.model or "").lower()
             _inject = any(p.lower() in model_lower for p in _enforce if isinstance(p, str))
         else:
-            # "auto" or any unrecognised value — use hardcoded defaults
-            model_lower = (agent.model or "").lower()
-            _inject = any(p in model_lower for p in TOOL_USE_ENFORCEMENT_MODELS)
+            # "auto" or any unrecognised value — use the hardcoded family
+            # defaults via the shared prompt-side capabilities resolver.
+            from agent.model_capabilities import model_capabilities
+            _inject = model_capabilities(agent.model).tool_use_enforcement
         if _inject:
             stable_parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
-            _model_lower = (agent.model or "").lower()
+            from agent.model_capabilities import model_capabilities
+            _caps = model_capabilities(agent.model)
             # Google model operational guidance (conciseness, absolute
             # paths, parallel tool calls, verify-before-edit, etc.)
-            if "gemini" in _model_lower or "gemma" in _model_lower:
+            if _caps.google_operational:
                 stable_parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
             # OpenAI GPT/Codex execution discipline (tool persistence,
             # prerequisite checks, verification, anti-hallucination).
             # Also applied to xAI Grok — same failure modes (claims completion
             # without tool calls, suggests workarounds instead of using
             # existing tools, replies with plans instead of executing).
-            if "gpt" in _model_lower or "codex" in _model_lower or "grok" in _model_lower:
+            if _caps.openai_execution:
                 stable_parts.append(OPENAI_MODEL_EXECUTION_GUIDANCE)
 
     has_skills_tools = any(name in agent.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
