@@ -198,16 +198,37 @@ per-site, bootstrap characterization coverage, migrate incrementally.
    header route); a naive `is_anthropic_model()` causes silent 0%-cache
    /re-billing regressions. Needs a real per-transport capability model +
    wire-format characterization tests.
-3. **`run_conversation` 4,939-line split (§3)** — highest value, hottest
-   path. Do the doc's 3 ordered steps as SEPARATE verified commits:
-   (a) single `_finalize_turn()` for all ~30 exits (mechanical);
-   (b) extract the inner retry-loop into a `TurnAttempt` object owning its
-   counters; (c) strategy table on `error_classifier.reason`. Land each
-   with the full agent/ + run_agent/ suites green.
+3. **`run_conversation` 4,911-line split (§3)** — highest value, hottest
+   path. Three ordered steps as separate verified commits:
+   - ✅ (a) `_finalize_turn()` DONE (2026-07-17): all 23 exits route
+     through one helper; `**extra` preserves each exit's EXACT key set
+     (verified by AST — absent-vs-False semantics intact). NOTE for step
+     (a) doers: the 23 dicts share 4 core keys but vary in flags, so the
+     helper must spread `**extra`, NOT normalize to a superset.
+   - ⬜ (b) extract the ~3.5k-line inner retry-loop into a `TurnAttempt`
+     object owning its counters (`compression_attempts` etc. reset in ≥8
+     places today) → returns `{outcome: ok|retry|compress|rotate|abort}`.
+   - ⬜ (c) strategy table on `error_classifier`'s `classified.reason`
+     replacing the elif recovery cascade (`:2517-3121`).
+   Steps (b)/(c) need deep control-flow understanding of the hot path —
+   dedicated careful work, full agent/ + run_agent/ green per step.
 
-- Also open (lower priority): §1.10 `get_setting`/`cfg_get` migration
-  (44 sites, each needs an individual precedence audit — tedious, do in
-  small batches); §1.9 adapter retry-hook (incremental, per-kind).
+- Also open (lower priority): §1.10 `get_setting`/`cfg_get` migration —
+  the PURE nested-`.get()` chains (`.get("X", {}).get("Y", D)` →
+  `cfg_get(cfg, "X", "Y", default=D)`) are safe zero-behavior refactors;
+  the env-var-OR-config sites (44×, "inconsistent precedence" per the doc)
+  each need an individual precedence audit before touching. §1.9 adapter
+  retry-hook (`_classify_send_error` on base so Discord's bespoke
+  rate-limit stack deletes) — incremental, per-kind.
+
+**Method note carried forward:** this session repeatedly found the
+audit's "N copies → 1" framing understated deliberate divergence
+(child-env §2.3, model-caps §1.5, run_conversation exit key-sets). Before
+any "merge N into 1", read all N and confirm they're actually the same —
+several weren't, and a naive merge would have shipped a silent
+security/billing/behavior regression. When they differ, the right move is
+often a drift-GUARD test (child-env) or a knob-parameterized generic
+(CapabilityRegistry), not a flattening merge.
 
 Phases 2 & 3 (CapabilityRegistry, CommandDef handlers, StopGuard, the
 `run_conversation` 4,939-line split, model-capabilities table) are scoped in
