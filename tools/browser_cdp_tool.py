@@ -42,19 +42,9 @@ _CDP_PRIVATE_PAGE_ALLOWED_METHODS = {
 }
 
 
-def _redact_cdp_output(value: Any) -> Any:
-    """Redact browser-originated CDP result data before returning it."""
-    from agent.redact import redact_sensitive_text
-
-    if isinstance(value, str):
-        return redact_sensitive_text(value, force=True)
-    if isinstance(value, list):
-        return [_redact_cdp_output(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_cdp_output(item) for item in value)
-    if isinstance(value, dict):
-        return {key: _redact_cdp_output(item) for key, item in value.items()}
-    return value
+# Shared with browser_tool / browser_camofox — this was a byte-identical
+# copy of browser_tool's walker before the fold.
+from tools.browser_boundary import redact_browser_output as _redact_cdp_output
 
 # ``websockets`` is a direct hermes-agent dependency because the browser CDP
 # supervisor and browser_dialog tool import it during tool discovery. Wrap the
@@ -139,6 +129,21 @@ def _browser_cdp_private_guard(
     calls like ``Runtime.evaluate`` or ``DOM.getDocument`` must not become the
     sibling bypass for the guarded browser tools.
     """
+    # Secret-in-URL exfil guard runs UNCONDITIONALLY — outside the fail-open
+    # probe try/except below and before the SSRF guard-active check, which
+    # only applies to cloud/private-page containment. Exfil is orthogonal to
+    # backend locality, and this path was the drift hole: browser_navigate
+    # blocked secret-bearing URLs while a raw CDP Page.navigate did not.
+    if method == "Page.navigate":
+        from tools.browser_boundary import secret_in_url_error
+
+        target_url = str((params or {}).get("url") or "").strip()
+        secret_err = secret_in_url_error(target_url) if target_url else None
+        if secret_err:
+            return tool_error(
+                secret_err, method=method, cdp_docs=CDP_DOCS_URL,
+            )
+
     try:
         from tools import browser_tool as bt  # type: ignore[import-not-found]
 
