@@ -103,6 +103,19 @@ def _is_alive_like_dispatcher(pid: int) -> bool:
                         break
         except (FileNotFoundError, PermissionError, OSError):
             pass
+    elif sys.platform == "darwin":
+        # Mirror production's macOS branch: the exited-but-unreaped child is
+        # a zombie here (this test holds the Popen handle), and kill(pid, 0)
+        # succeeds against zombies — ask ps for the BSD stat field instead.
+        try:
+            out = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            if "Z" in out:
+                return False
+        except (OSError, subprocess.SubprocessError):
+            pass
     return True
 
 
