@@ -1441,9 +1441,18 @@ def _is_verification_artifact_cleanup(command: str) -> bool:
         return False
 
     operand = argv[2]
-    temp_dir = os.path.realpath(tempfile.gettempdir())
+    raw_temp_dir = tempfile.gettempdir()
+    temp_dir = os.path.realpath(raw_temp_dir)
     basename = os.path.basename(operand)
-    if operand != os.path.join(temp_dir, basename):
+    # Accept the operand spelled via either the raw tempdir (what the
+    # artifact writer emits) or its resolved form — on macOS gettempdir()
+    # returns a symlinked path (/tmp, /var/folders/...) whose realpath lives
+    # under /private, so the resolved-only comparison never matched and the
+    # exemption silently stopped applying.
+    if operand not in (
+        os.path.join(raw_temp_dir, basename),
+        os.path.join(temp_dir, basename),
+    ):
         return False
 
     target = os.path.realpath(operand)

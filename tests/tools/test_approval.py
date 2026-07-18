@@ -128,7 +128,12 @@ class TestDetectDangerousRm:
                     None,
                 )
 
-    def test_symlinked_temp_dir_only_exempts_canonical_target(self, tmp_path):
+    def test_symlinked_temp_dir_exempts_both_spellings(self, tmp_path):
+        """gettempdir() itself may BE a symlinked spelling (macOS: /tmp and
+        /var/folders resolve under /private), and the artifact writer emits
+        that spelling — so both it and the canonical form are exempt. The
+        guarantee that matters is that the RESOLVED target lives in the
+        canonical temp dir (see the symlinked-file test below)."""
         real_temp = tmp_path / "real-temp"
         real_temp.mkdir()
         linked_temp = tmp_path / "linked-temp"
@@ -136,12 +141,31 @@ class TestDetectDangerousRm:
         basename = "hermes-verify-example.py"
 
         with mock_patch("tempfile.gettempdir", return_value=str(linked_temp)):
-            assert detect_dangerous_command(f"rm -f {linked_temp / basename}")[0] is True
+            assert detect_dangerous_command(f"rm -f {linked_temp / basename}") == (
+                False,
+                None,
+                None,
+            )
             assert detect_dangerous_command(f"rm -f {real_temp / basename}") == (
                 False,
                 None,
                 None,
             )
+
+    def test_symlinked_artifact_file_is_not_exempt(self, tmp_path):
+        """An artifact-named symlink pointing OUTSIDE the temp dir must not
+        ride the exemption: the resolved target is what gets deleted."""
+        from tools.approval import _is_verification_artifact_cleanup
+
+        real_temp = tmp_path / "real-temp"
+        real_temp.mkdir()
+        outside = tmp_path / "outside.py"
+        outside.write_text("precious")
+        trap = real_temp / "hermes-verify-trap.py"
+        trap.symlink_to(outside)
+
+        with mock_patch("tempfile.gettempdir", return_value=str(real_temp)):
+            assert _is_verification_artifact_cleanup(f"rm -f {trap}") is False
 
     def test_verification_cleanup_exemption_rejects_broader_deletions(self):
         commands = (
