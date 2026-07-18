@@ -283,6 +283,12 @@ from typing import Optional
 from hermes_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_hooks_flag
 from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.moa import build_moa_parser
+from hermes_cli.subcommands.whatsapp_cloud import build_whatsapp_cloud_parser
+from hermes_cli.subcommands.checkpoints import build_checkpoints_parser
+from hermes_cli.subcommands.bundles import build_bundles_parser
+from hermes_cli.subcommands.curator import build_curator_parser
+from hermes_cli.subcommands.pets import build_pets_parser
+from hermes_cli.subcommands.journey import build_journey_parser
 from hermes_cli.subcommands.fallback import build_fallback_parser
 from hermes_cli.subcommands.secrets import build_secrets_parser
 from hermes_cli.subcommands.migrate import build_migrate_parser
@@ -13007,17 +13013,7 @@ def main():
     # =========================================================================
     # whatsapp-cloud command (official Meta Cloud API; complement to Baileys)
     # =========================================================================
-    whatsapp_cloud_parser = subparsers.add_parser(
-        "whatsapp-cloud",
-        help="Set up WhatsApp Business Cloud API integration",
-        description=(
-            "Configure the official Meta WhatsApp Business Cloud API "
-            "adapter (Business account required, public webhook URL "
-            "required). Distinct from `hermes whatsapp` which sets up "
-            "the Baileys bridge for personal accounts."
-        ),
-    )
-    whatsapp_cloud_parser.set_defaults(func=cmd_whatsapp_cloud)
+    build_whatsapp_cloud_parser(subparsers, cmd_whatsapp_cloud=cmd_whatsapp_cloud)
 
     # =========================================================================
     # slack command  (parser built in hermes_cli/subcommands/slack.py)
@@ -13119,16 +13115,7 @@ def main():
     # =========================================================================
     # checkpoints command
     # =========================================================================
-    checkpoints_parser = subparsers.add_parser(
-        "checkpoints",
-        help="Inspect / prune / clear ~/.hermes/checkpoints/",
-        description="Manage the filesystem checkpoint store — the shadow git "
-        "repo hermes uses to snapshot working directories before "
-        "write_file/patch/terminal calls. Lets you see how much "
-        "space checkpoints occupy, force a prune, or wipe the base.",
-    )
-    from hermes_cli.checkpoints import register_cli as _register_checkpoints_cli
-    _register_checkpoints_cli(checkpoints_parser)
+    build_checkpoints_parser(subparsers)
 
     # =========================================================================
     # import command  (parser built in hermes_cli/subcommands/import_cmd.py)
@@ -13158,18 +13145,7 @@ def main():
     # =========================================================================
     # bundles command — skill bundles (alias /<name> for multiple skills)
     # =========================================================================
-    bundles_parser = subparsers.add_parser(
-        "bundles",
-        help="Create, list, and manage skill bundles (aliases for multiple skills)",
-        description=(
-            "Skill bundles let you load several skills under one slash "
-            "command. `/<bundle>` from the CLI or gateway loads every "
-            "referenced skill at once."
-        ),
-    )
-    from hermes_cli.bundles import register_cli as _bundles_register, bundles_command
-    _bundles_register(bundles_parser)
-    bundles_parser.set_defaults(func=bundles_command)
+    build_bundles_parser(subparsers)
 
     # =========================================================================
     # plugins command  (parser built in hermes_cli/subcommands/plugins.py)
@@ -13224,64 +13200,17 @@ def main():
     # =========================================================================
     # curator command — background skill maintenance
     # =========================================================================
-    curator_parser = subparsers.add_parser(
-        "curator",
-        help="Background skill maintenance (curator) — status, run, pause, pin",
-        description=(
-            "The curator is an auxiliary-model background task that "
-            "periodically reviews agent-created skills, prunes stale ones, "
-            "consolidates overlaps, and archives obsolete skills. "
-            "Bundled and hub-installed skills are never touched. "
-            "Archives are recoverable; auto-deletion never happens."
-        ),
-    )
-    try:
-        from hermes_cli.curator import register_cli as _register_curator_cli
-
-        _register_curator_cli(curator_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("curator CLI wiring failed: %s", _exc)
+    build_curator_parser(subparsers)
 
     # =========================================================================
     # pets command — petdex animated mascots (CLI / TUI / desktop display)
     # =========================================================================
-    pets_parser = subparsers.add_parser(
-        "pets",
-        help="Browse, install, and select petdex animated pets",
-        description=(
-            "Petdex (https://github.com/crafter-station/petdex) is a public "
-            "gallery of animated sprite pets for coding agents. Install one "
-            "and Hermes shows it reacting to agent activity across the CLI, "
-            "TUI, and desktop app."
-        ),
-    )
-    try:
-        from hermes_cli.pets import register_cli as _register_pets_cli
-
-        _register_pets_cli(pets_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("pets CLI wiring failed: %s", _exc)
+    build_pets_parser(subparsers)
 
     # =========================================================================
     # journey command — learned skills + memories over time, in the terminal
     # =========================================================================
-    journey_parser = subparsers.add_parser(
-        "journey",
-        aliases=["learning", "memory-graph"],
-        help="Timeline of learned skills + memories over time",
-        description=(
-            "A terminal rendition of the desktop Star Map / Memory Graph: a "
-            "timeline bar chart of learned skills and memories over time "
-            "(oldest at top, newest at bottom) plus a playable constellation "
-            "scrubber. Mirrors the TUI `/journey` overlay and the desktop panel."
-        ),
-    )
-    try:
-        from hermes_cli.journey import register_cli as _register_journey_cli
-
-        _register_journey_cli(journey_parser)
-    except Exception as _exc:
-        logging.getLogger(__name__).debug("journey CLI wiring failed: %s", _exc)
+    build_journey_parser(subparsers)
 
     # =========================================================================
     # memory command  (parser built in hermes_cli/subcommands/memory.py)
