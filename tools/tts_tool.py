@@ -2279,6 +2279,84 @@ def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any])
 
 
 # ===========================================================================
+# Built-in provider dispatch table
+# ===========================================================================
+# Each built-in TTS provider does the same three things: (optionally) ensure
+# its client is importable, log a start line, and call
+# ``_generate_<provider>(text, file_str, tts_config)``. Declaring that as data
+# collapses an 11-arm elif ladder (depth 16) into one lookup. Two guard styles:
+# ``ensure_import`` raises ImportError when the SDK is missing; ``check_available``
+# returns a bool for local backends that probe binaries instead of imports.
+# ``import_error`` is the exact message surfaced to the model on a missing dep.
+class _BuiltinTTS:
+    __slots__ = ("generate", "log_msg", "ensure_import", "check_available", "import_error")
+
+    def __init__(self, generate, log_msg, *, ensure_import=None,
+                 check_available=None, import_error=""):
+        self.generate = generate
+        self.log_msg = log_msg
+        self.ensure_import = ensure_import
+        self.check_available = check_available
+        self.import_error = import_error
+
+
+def _builtin_tts_dispatch() -> Dict[str, "_BuiltinTTS"]:
+    """Provider → handler map. Built lazily so the module imports cheaply."""
+    return {
+        "elevenlabs": _BuiltinTTS(
+            _generate_elevenlabs, "Generating speech with ElevenLabs...",
+            ensure_import=_import_elevenlabs,
+            import_error="ElevenLabs provider selected but 'elevenlabs' package not installed. Run: pip install elevenlabs",
+        ),
+        "openai": _BuiltinTTS(
+            _generate_openai_tts, "Generating speech with OpenAI TTS...",
+            ensure_import=_import_openai_client,
+            import_error="OpenAI provider selected but 'openai' package not installed.",
+        ),
+        "deepinfra": _BuiltinTTS(
+            _generate_deepinfra_tts, "Generating speech with DeepInfra TTS...",
+            ensure_import=_import_openai_client,
+            import_error="DeepInfra TTS uses the 'openai' SDK but it isn't installed.",
+        ),
+        "minimax": _BuiltinTTS(
+            _generate_minimax_tts, "Generating speech with MiniMax TTS...",
+        ),
+        "xai": _BuiltinTTS(
+            _generate_xai_tts, "Generating speech with xAI TTS...",
+        ),
+        "mistral": _BuiltinTTS(
+            _generate_mistral_tts, "Generating speech with Mistral Voxtral TTS...",
+            ensure_import=_import_mistral_client,
+            import_error="Mistral provider selected but 'mistralai' package not installed. "
+                         "Run: pip install 'hermes-agent[mistral]'",
+        ),
+        "gemini": _BuiltinTTS(
+            _generate_gemini_tts, "Generating speech with Google Gemini TTS...",
+        ),
+        "neutts": _BuiltinTTS(
+            _generate_neutts, "Generating speech with NeuTTS (local)...",
+            check_available=_check_neutts_available,
+            import_error="NeuTTS provider selected but neutts is not installed. "
+                         "Run hermes setup and choose NeuTTS, or install espeak-ng and run python -m pip install -U neutts[all].",
+        ),
+        "kittentts": _BuiltinTTS(
+            _generate_kittentts, "Generating speech with KittenTTS (local, ~25MB)...",
+            ensure_import=_import_kittentts,
+            import_error="KittenTTS provider selected but 'kittentts' package not installed. "
+                         "Run 'hermes setup tts' and choose KittenTTS, or install manually: "
+                         "pip install https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl",
+        ),
+        "piper": _BuiltinTTS(
+            _generate_piper_tts, "Generating speech with Piper (local)...",
+            ensure_import=_import_piper,
+            import_error="Piper provider selected but 'piper-tts' package not installed. "
+                         "Run 'hermes tools' and select Piper under TTS, or install manually: "
+                         "pip install piper-tts",
+        ),
+    }
+
+
+# ===========================================================================
 # Main tool function
 # ===========================================================================
 def text_to_speech_tool(
@@ -2403,98 +2481,23 @@ def text_to_speech_tool(
         ) is not None:
             file_str = _plugin_path
 
-        elif provider == "elevenlabs":
-            try:
-                _import_elevenlabs()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "ElevenLabs provider selected but 'elevenlabs' package not installed. Run: pip install elevenlabs"
-                }, ensure_ascii=False)
-            logger.info("Generating speech with ElevenLabs...")
-            _generate_elevenlabs(text, file_str, tts_config)
-
-        elif provider == "openai":
-            try:
-                _import_openai_client()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "OpenAI provider selected but 'openai' package not installed."
-                }, ensure_ascii=False)
-            logger.info("Generating speech with OpenAI TTS...")
-            _generate_openai_tts(text, file_str, tts_config)
-
-        elif provider == "deepinfra":
-            try:
-                _import_openai_client()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "DeepInfra TTS uses the 'openai' SDK but it isn't installed."
-                }, ensure_ascii=False)
-            logger.info("Generating speech with DeepInfra TTS...")
-            _generate_deepinfra_tts(text, file_str, tts_config)
-
-        elif provider == "minimax":
-            logger.info("Generating speech with MiniMax TTS...")
-            _generate_minimax_tts(text, file_str, tts_config)
-
-        elif provider == "xai":
-            logger.info("Generating speech with xAI TTS...")
-            _generate_xai_tts(text, file_str, tts_config)
-
-        elif provider == "mistral":
-            try:
-                _import_mistral_client()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "Mistral provider selected but 'mistralai' package not installed. "
-                             "Run: pip install 'hermes-agent[mistral]'"
-                }, ensure_ascii=False)
-            logger.info("Generating speech with Mistral Voxtral TTS...")
-            _generate_mistral_tts(text, file_str, tts_config)
-
-        elif provider == "gemini":
-            logger.info("Generating speech with Google Gemini TTS...")
-            _generate_gemini_tts(text, file_str, tts_config)
-
-        elif provider == "neutts":
-            if not _check_neutts_available():
-                return json.dumps({
-                    "success": False,
-                    "error": "NeuTTS provider selected but neutts is not installed. "
-                             "Run hermes setup and choose NeuTTS, or install espeak-ng and run python -m pip install -U neutts[all]."
-                }, ensure_ascii=False)
-            logger.info("Generating speech with NeuTTS (local)...")
-            _generate_neutts(text, file_str, tts_config)
-
-        elif provider == "kittentts":
-            try:
-                _import_kittentts()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "KittenTTS provider selected but 'kittentts' package not installed. "
-                             "Run 'hermes setup tts' and choose KittenTTS, or install manually: "
-                             "pip install https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl"
-                }, ensure_ascii=False)
-            logger.info("Generating speech with KittenTTS (local, ~25MB)...")
-            _generate_kittentts(text, file_str, tts_config)
-
-        elif provider == "piper":
-            try:
-                _import_piper()
-            except ImportError:
-                return json.dumps({
-                    "success": False,
-                    "error": "Piper provider selected but 'piper-tts' package not installed. "
-                             "Run 'hermes tools' and select Piper under TTS, or install manually: "
-                             "pip install piper-tts",
-                }, ensure_ascii=False)
-            logger.info("Generating speech with Piper (local)...")
-            _generate_piper_tts(text, file_str, tts_config)
+        elif provider in (_builtin := _builtin_tts_dispatch()):
+            handler = _builtin[provider]
+            if handler.ensure_import is not None:
+                try:
+                    handler.ensure_import()
+                except ImportError:
+                    return json.dumps(
+                        {"success": False, "error": handler.import_error},
+                        ensure_ascii=False,
+                    )
+            if handler.check_available is not None and not handler.check_available():
+                return json.dumps(
+                    {"success": False, "error": handler.import_error},
+                    ensure_ascii=False,
+                )
+            logger.info(handler.log_msg)
+            handler.generate(text, file_str, tts_config)
 
         else:
             # Default: Edge TTS (free), with NeuTTS as local fallback
