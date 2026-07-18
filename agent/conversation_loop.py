@@ -79,6 +79,39 @@ logger = logging.getLogger(__name__)
 INTERRUPT_WAITING_FOR_MODEL_PREFIX = "Operation interrupted: waiting for model response ("
 
 
+def _apply_stop_guard(
+    agent: Any,
+    messages: list,
+    final_msg: dict,
+    nudge: str,
+    *,
+    counter_attr: str,
+    finish_reason: str,
+    synthetic_flag: str,
+) -> None:
+    """Inject a synthetic stop-guard turn to keep the loop going one more step.
+
+    The three stop guards (verify-on-stop, pre_verify hook, kanban worker)
+    each build a different nudge under a different gate, but the *injection*
+    is identical: bump the guard's attempt counter, stamp the attempted final
+    answer with a synthetic ``finish_reason`` + flag, keep it in history so the
+    following synthetic **user** nudge preserves role alternation, and flag
+    both synthetic so neither persists into the resumed transcript (otherwise a
+    premature "done" survives with the nudge stripped → assistant→assistant
+    adjacency, #55733).
+
+    Per-guard concerns (logging, ``_emit_status``, clearing ``final_response``
+    into ``_pending_verification_response``, and the ``continue``) stay at the
+    call site — they differ between guards.
+    """
+    setattr(agent, counter_attr, getattr(agent, counter_attr, 0) + 1)
+    final_msg["finish_reason"] = finish_reason
+    final_msg[synthetic_flag] = True
+    messages.append(final_msg)
+    messages.append({"role": "user", "content": nudge, synthetic_flag: True})
+    agent._session_messages = messages
+
+
 def _image_error_max_dimension(error: Exception) -> Optional[int]:
     """Extract a provider-reported image dimension ceiling, if present."""
     parts = []
@@ -5242,27 +5275,12 @@ def run_conversation(
                     _verify_nudge = None
 
                 if _verify_nudge:
-                    agent._verification_stop_nudges = (
-                        getattr(agent, "_verification_stop_nudges", 0) + 1
+                    _apply_stop_guard(
+                        agent, messages, final_msg, _verify_nudge,
+                        counter_attr="_verification_stop_nudges",
+                        finish_reason="verification_required",
+                        synthetic_flag="_verification_stop_synthetic",
                     )
-                    final_msg["finish_reason"] = "verification_required"
-                    final_msg["_verification_stop_synthetic"] = True
-                    messages.append(final_msg)
-                    # Keep the attempted final answer in model history so the
-                    # synthetic user nudge preserves role alternation, but do
-                    # not surface it to the user as an interim answer. The
-                    # whole point of this guard is to prevent premature
-                    # "done" claims before checks run. Both the attempted
-                    # answer and the nudge are flagged synthetic so neither
-                    # persists — otherwise the resumed transcript keeps a
-                    # premature "done" with the nudge stripped, producing an
-                    # assistant→assistant adjacency. (#55733)
-                    messages.append({
-                        "role": "user",
-                        "content": _verify_nudge,
-                        "_verification_stop_synthetic": True,
-                    })
-                    agent._session_messages = messages
                     # Run the verification-stop loop silently — the nudge is an
                     # internal turn that should not add noise to the user's
                     # terminal. Keep a debug breadcrumb in agent.log for tracing.
@@ -5309,20 +5327,12 @@ def run_conversation(
                     _verify_nudge2 = None
 
                 if _verify_nudge2:
-                    agent._pre_verify_nudges = _attempt + 1
-                    final_msg["finish_reason"] = "verify_hook_continue"
-                    final_msg["_pre_verify_synthetic"] = True
-                    # Same alternation contract as verify-on-stop: keep the
-                    # attempted answer in history, follow it with a synthetic
-                    # user nudge, and don't surface the premature answer. Both
-                    # are flagged synthetic so neither persists. (#55733)
-                    messages.append(final_msg)
-                    messages.append({
-                        "role": "user",
-                        "content": _verify_nudge2,
-                        "_pre_verify_synthetic": True,
-                    })
-                    agent._session_messages = messages
+                    _apply_stop_guard(
+                        agent, messages, final_msg, _verify_nudge2,
+                        counter_attr="_pre_verify_nudges",
+                        finish_reason="verify_hook_continue",
+                        synthetic_flag="_pre_verify_synthetic",
+                    )
                     logger.debug("pre_verify nudge issued (attempt %d)",
                                  agent._pre_verify_nudges)
                     _pending_verification_response = final_response
@@ -5347,18 +5357,12 @@ def run_conversation(
                     _kanban_nudge = None
 
                 if _kanban_nudge:
-                    agent._kanban_stop_nudges = (
-                        getattr(agent, "_kanban_stop_nudges", 0) + 1
+                    _apply_stop_guard(
+                        agent, messages, final_msg, _kanban_nudge,
+                        counter_attr="_kanban_stop_nudges",
+                        finish_reason="kanban_terminal_required",
+                        synthetic_flag="_kanban_stop_synthetic",
                     )
-                    final_msg["finish_reason"] = "kanban_terminal_required"
-                    final_msg["_kanban_stop_synthetic"] = True
-                    messages.append(final_msg)
-                    messages.append({
-                        "role": "user",
-                        "content": _kanban_nudge,
-                        "_kanban_stop_synthetic": True,
-                    })
-                    agent._session_messages = messages
                     logger.info(
                         "kanban stop-loop nudge issued (attempt %d) task=%s",
                         agent._kanban_stop_nudges,
