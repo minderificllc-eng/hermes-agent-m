@@ -193,33 +193,46 @@ per-site, bootstrap characterization coverage, migrate incrementally.
    tables.py` pins CLI coverage; brittle `getsource(_handle_message)`
    command-literal tests repointed to the table. 9,752 cli + 9,181 gateway
    tests green.
-2. **model-capabilities (§1.5)** — see the doc's ⚠️ note: the bare
+2. ✅ **model-capabilities (§1.5) — PROMPT-SIDE DONE (2026-07-17).** The
+   prompt-shaping family checks (tool-use enforcement, developer role,
+   Google/OpenAI operational guidance, edit-format family) are consolidated
+   behind `agent.model_capabilities.model_capabilities(model) -> ModelCaps`;
+   3 consumers migrated (system_prompt, chat_completions ×2). Pure
+   re-exposure, characterization-pinned across a 19-model matrix. **The
+   WIRE-SIDE stays deliberately separate and is NOT a TODO** — the bare
    `"claude"` checks are context-specific (wire format / cache envelope /
-   header route); a naive `is_anthropic_model()` causes silent 0%-cache
-   /re-billing regressions. Needs a real per-transport capability model +
-   wire-format characterization tests.
-3. **`run_conversation` 4,911-line split (§3)** — highest value, hottest
-   path. Three ordered steps as separate verified commits:
-   - ✅ (a) `_finalize_turn()` DONE (2026-07-17): all 23 exits route
-     through one helper; `**extra` preserves each exit's EXACT key set
-     (verified by AST — absent-vs-False semantics intact). NOTE for step
-     (a) doers: the 23 dicts share 4 core keys but vary in flags, so the
-     helper must spread `**extra`, NOT normalize to a superset.
+   header route); `agent_runtime_helpers` splits `is_claude` from
+   `is_anthropic_wire` because Kimi/Moonshot on OpenRouter use Claude's
+   cache envelope. A naive `is_anthropic_model()` merge silently serves 0%
+   cache hits / re-bills every turn. This is a design fact, not incomplete
+   work — see the doc §1.5 ⚠️ note and `model_capabilities.py`'s SCOPE
+   docstring.
+3. ✅/⬜ **`run_conversation` split (§3)** — hottest path, 3 ordered steps:
+   - ✅ (a) `_finalize_turn()` DONE: all 23 exits through one helper;
+     `**extra` preserves each exit's EXACT key set (AST-verified). NOTE:
+     the 23 dicts share 4 core keys but vary in flags, so the helper
+     spreads `**extra`, NOT a normalized superset.
    - ⬜ (b) extract the ~3.5k-line inner retry-loop into a `TurnAttempt`
      object owning its counters (`compression_attempts` etc. reset in ≥8
-     places today) → returns `{outcome: ok|retry|compress|rotate|abort}`.
-   - ⬜ (c) strategy table on `error_classifier`'s `classified.reason`
-     replacing the elif recovery cascade (`:2517-3121`).
-   Steps (b)/(c) need deep control-flow understanding of the hot path —
-   dedicated careful work, full agent/ + run_agent/ green per step.
+     places) → `{outcome: ok|retry|compress|rotate|abort}`.
+   - ⬜ (c) strategy table on `classified.reason` replacing the recovery
+     cascade (`:2514-2986`). **Investigated 2026-07-17:** the cascade arms
+     are substantial distinct recovery *procedures* (image-shrink,
+     multimodal-strip, thinking-signature-strip, invalid-encrypted-replay,
+     llama-grammar-strip, oauth-beta), each nested 16+ spaces deep and
+     mutating heavily-shared loop state (`messages`, `api_messages`, the
+     `_retry` flag object) then `continue`-ing — NOT a flat elif ladder
+     like the cli one that folded cleanly. Extraction needs each arm's full
+     read/write closure captured faithfully; a missed loop-local = a silent
+     recovery regression that only fires on a specific provider error (hard
+     for the suite to catch). This is the plan's single highest-care item;
+     do it dedicated, one arm at a time, with a provider-error repro per arm.
 
-- Also open (lower priority): §1.10 `get_setting`/`cfg_get` migration —
-  the PURE nested-`.get()` chains (`.get("X", {}).get("Y", D)` →
-  `cfg_get(cfg, "X", "Y", default=D)`) are safe zero-behavior refactors;
-  the env-var-OR-config sites (44×, "inconsistent precedence" per the doc)
-  each need an individual precedence audit before touching. §1.9 adapter
-  retry-hook (`_classify_send_error` on base so Discord's bespoke
-  rate-limit stack deletes) — incremental, per-kind.
+- ⬜ **§1.10 remaining migration:** the `get_setting` HELPER is DONE (added
+  + tested). The per-site adoption is NOT uniform — many sites use
+  `os.getenv(X) or cfg...` (falsy-fallthrough) which differs from
+  `get_setting`'s None-based presence check; each needs a falsy-vs-None
+  audit. Migrate opportunistically, not blind find-replace.
 
 **Method note carried forward:** this session repeatedly found the
 audit's "N copies → 1" framing understated deliberate divergence
