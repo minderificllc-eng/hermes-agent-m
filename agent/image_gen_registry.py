@@ -16,21 +16,30 @@ If unset, :func:`get_active_provider` applies fallback logic:
    default — matches pre-plugin behavior).
 3. Otherwise return ``None`` (the tool surfaces a helpful error pointing
    the user at ``hermes tools``).
+
+Implementation lives in :class:`agent.capability_registry.CapabilityRegistry`;
+this module owns the instance, the config read, and the public surface.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from agent.capability_registry import CapabilityRegistry
 from agent.image_gen_provider import ImageGenProvider
 
 logger = logging.getLogger(__name__)
 
+_REGISTRY: CapabilityRegistry[ImageGenProvider] = CapabilityRegistry(
+    label="Image gen",
+    provider_type=ImageGenProvider,
+    logger=logger,
+)
 
-_providers: Dict[str, ImageGenProvider] = {}
-_lock = threading.Lock()
+# Test-visible aliases: existing tests mutate these in place.
+_providers = _REGISTRY._providers
+_lock = _REGISTRY._lock
 
 
 def register_provider(provider: ImageGenProvider) -> None:
@@ -40,36 +49,17 @@ def register_provider(provider: ImageGenProvider) -> None:
     a debug message — this makes hot-reload scenarios (tests, dev loops)
     behave predictably.
     """
-    if not isinstance(provider, ImageGenProvider):
-        raise TypeError(
-            f"register_provider() expects an ImageGenProvider instance, "
-            f"got {type(provider).__name__}"
-        )
-    name = provider.name
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("Image gen provider .name must be a non-empty string")
-    with _lock:
-        existing = _providers.get(name)
-        _providers[name] = provider
-    if existing is not None:
-        logger.debug("Image gen provider '%s' re-registered (was %r)", name, type(existing).__name__)
-    else:
-        logger.debug("Registered image gen provider '%s' (%s)", name, type(provider).__name__)
+    _REGISTRY.register(provider)
 
 
 def list_providers() -> List[ImageGenProvider]:
     """Return all registered providers, sorted by name."""
-    with _lock:
-        items = list(_providers.values())
-    return sorted(items, key=lambda p: p.name)
+    return _REGISTRY.list_providers()
 
 
 def get_provider(name: str) -> Optional[ImageGenProvider]:
     """Return the provider registered under *name*, or None."""
-    if not isinstance(name, str):
-        return None
-    with _lock:
-        return _providers.get(name.strip())
+    return _REGISTRY.get_provider(name)
 
 
 def get_active_provider() -> Optional[ImageGenProvider]:
@@ -102,44 +92,13 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     except Exception as exc:
         logger.debug("Could not read image_gen.provider from config: %s", exc)
 
-    with _lock:
-        snapshot = dict(_providers)
-
-    def _is_available_safe(p: ImageGenProvider) -> bool:
-        """Wrap ``is_available()`` so a buggy provider doesn't kill resolution."""
-        try:
-            return bool(p.is_available())
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("image_gen provider %s.is_available() raised %s", p.name, exc)
-            return False
-
-    # 1. Explicit config wins — return regardless of is_available() so the
-    #    user gets a precise downstream error message rather than a silent
-    #    backend switch.
-    if configured:
-        provider = snapshot.get(configured)
-        if provider is not None:
-            return provider
-        logger.debug(
-            "image_gen.provider='%s' configured but not registered; falling back",
-            configured,
-        )
-
-    # 2. Fallback: single registered provider — but only if it's actually
-    #    available (no credentials = don't surface it as "active").
-    available = [p for p in snapshot.values() if _is_available_safe(p)]
-    if len(available) == 1:
-        return available[0]
-
-    # 3. Fallback: prefer legacy FAL for backward compat, when available.
-    fal = snapshot.get("fal")
-    if fal is not None and _is_available_safe(fal):
-        return fal
-
-    return None
+    return _REGISTRY.resolve_active(
+        configured,
+        configured_desc="image_gen.provider",
+        legacy_preference=("fal",),
+    )
 
 
 def _reset_for_tests() -> None:
     """Clear the registry. **Test-only.**"""
-    with _lock:
-        _providers.clear()
+    _REGISTRY.reset_for_tests()

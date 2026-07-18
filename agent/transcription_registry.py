@@ -15,14 +15,18 @@ Plugin names that collide with a built-in STT provider (``local``,
 rejected at registration with a warning. This invariant is also
 re-checked at dispatch time in
 :func:`tools.transcription_tools._dispatch_to_plugin_provider`.
+
+Implementation lives in :class:`agent.capability_registry.CapabilityRegistry`;
+this module owns the instance, the built-in name set, and the public
+surface.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from agent.capability_registry import CapabilityRegistry
 from agent.transcription_provider import TranscriptionProvider
 
 logger = logging.getLogger(__name__)
@@ -48,9 +52,18 @@ _BUILTIN_NAMES = frozenset({
     "deepinfra",
 })
 
+_REGISTRY: CapabilityRegistry[TranscriptionProvider] = CapabilityRegistry(
+    label="Transcription",
+    provider_type=TranscriptionProvider,
+    logger=logger,
+    normalize_keys=True,
+    builtin_names=_BUILTIN_NAMES,
+    builtin_label="STT",
+)
 
-_providers: Dict[str, TranscriptionProvider] = {}
-_lock = threading.Lock()
+# Test-visible aliases: existing tests mutate these in place.
+_providers = _REGISTRY._providers
+_lock = _REGISTRY._lock
 
 
 def register_provider(provider: TranscriptionProvider) -> None:
@@ -67,58 +80,24 @@ def register_provider(provider: TranscriptionProvider) -> None:
     logs a debug message — makes hot-reload scenarios (tests, dev
     loops) behave predictably.
     """
-    if not isinstance(provider, TranscriptionProvider):
-        raise TypeError(
-            f"register_provider() expects a TranscriptionProvider instance, "
-            f"got {type(provider).__name__}"
-        )
-    name = provider.name
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("Transcription provider .name must be a non-empty string")
-    key = name.strip().lower()
-    if key in _BUILTIN_NAMES:
-        logger.warning(
-            "Transcription provider '%s' shadows a built-in name; registration "
-            "ignored. Built-in STT providers (%s) always win — pick a different "
-            "name.",
-            key, ", ".join(sorted(_BUILTIN_NAMES)),
-        )
-        return
-    with _lock:
-        existing = _providers.get(key)
-        _providers[key] = provider
-    if existing is not None:
-        logger.debug(
-            "Transcription provider '%s' re-registered (was %r)",
-            key, type(existing).__name__,
-        )
-    else:
-        logger.debug(
-            "Registered transcription provider '%s' (%s)",
-            key, type(provider).__name__,
-        )
+    _REGISTRY.register(provider)
 
 
 def list_providers() -> List[TranscriptionProvider]:
     """Return all registered providers, sorted by name."""
-    with _lock:
-        items = list(_providers.values())
-    return sorted(items, key=lambda p: p.name)
+    return _REGISTRY.list_providers()
 
 
 def get_provider(name: str) -> Optional[TranscriptionProvider]:
     """Return the provider registered under *name*, or None.
 
     Name matching is case-insensitive and whitespace-tolerant — mirrors
-    how ``tools.transcription_tools._get_provider`` normalizes the
-    configured ``stt.provider`` value.
+    how ``tools.transcription_tools`` normalizes the configured
+    ``stt.provider`` value.
     """
-    if not isinstance(name, str):
-        return None
-    return _providers.get(name.strip().lower())
+    return _REGISTRY.get_provider(name)
 
 
 def _reset_for_tests() -> None:
     """Clear the registry. **Test-only.**"""
-    with _lock:
-        _providers.clear()
+    _REGISTRY.reset_for_tests()

@@ -20,21 +20,35 @@ same: the unconfigured fallback is filtered by ``is_available()`` so a box
 that has credentials for only one backend (e.g. DeepInfra, while the
 ``fal``/``xai`` plugins also register unconditionally) auto-selects it
 instead of returning ``None``.
+
+One deliberate difference from image gen: a configured-but-unregistered
+``video_gen.provider`` **fails closed** (returns None) instead of falling
+back — the tool then surfaces a "provider not registered" error rather
+than silently running a different backend.
+
+Implementation lives in :class:`agent.capability_registry.CapabilityRegistry`;
+this module owns the instance, the config read, and the public surface.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from agent.capability_registry import CapabilityRegistry
 from agent.video_gen_provider import VideoGenProvider
 
 logger = logging.getLogger(__name__)
 
+_REGISTRY: CapabilityRegistry[VideoGenProvider] = CapabilityRegistry(
+    label="Video gen",
+    provider_type=VideoGenProvider,
+    logger=logger,
+)
 
-_providers: Dict[str, VideoGenProvider] = {}
-_lock = threading.Lock()
+# Test-visible aliases: existing tests mutate these in place.
+_providers = _REGISTRY._providers
+_lock = _REGISTRY._lock
 
 
 def register_provider(provider: VideoGenProvider) -> None:
@@ -44,36 +58,17 @@ def register_provider(provider: VideoGenProvider) -> None:
     a debug message — this makes hot-reload scenarios (tests, dev loops)
     behave predictably.
     """
-    if not isinstance(provider, VideoGenProvider):
-        raise TypeError(
-            f"register_provider() expects a VideoGenProvider instance, "
-            f"got {type(provider).__name__}"
-        )
-    name = provider.name
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("Video gen provider .name must be a non-empty string")
-    with _lock:
-        existing = _providers.get(name)
-        _providers[name] = provider
-    if existing is not None:
-        logger.debug("Video gen provider '%s' re-registered (was %r)", name, type(existing).__name__)
-    else:
-        logger.debug("Registered video gen provider '%s' (%s)", name, type(provider).__name__)
+    _REGISTRY.register(provider)
 
 
 def list_providers() -> List[VideoGenProvider]:
     """Return all registered providers, sorted by name."""
-    with _lock:
-        items = list(_providers.values())
-    return sorted(items, key=lambda p: p.name)
+    return _REGISTRY.list_providers()
 
 
 def get_provider(name: str) -> Optional[VideoGenProvider]:
     """Return the provider registered under *name*, or None."""
-    if not isinstance(name, str):
-        return None
-    with _lock:
-        return _providers.get(name.strip())
+    return _REGISTRY.get_provider(name)
 
 
 def get_active_provider() -> Optional[VideoGenProvider]:
@@ -95,39 +90,13 @@ def get_active_provider() -> Optional[VideoGenProvider]:
     except Exception as exc:
         logger.debug("Could not read video_gen.provider from config: %s", exc)
 
-    with _lock:
-        snapshot = dict(_providers)
-
-    if configured:
-        provider = snapshot.get(configured)
-        if provider is not None:
-            return provider
-        logger.debug(
-            "video_gen.provider='%s' configured but not registered; failing closed",
-            configured,
-        )
-        return None
-
-    def _is_available_safe(p: VideoGenProvider) -> bool:
-        """Wrap ``is_available()`` so a buggy provider doesn't kill resolution."""
-        try:
-            return bool(p.is_available())
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("video_gen provider %s.is_available() raised %s", p.name, exc)
-            return False
-
-    # Fallback: single *available* provider — filter by is_available() so a
-    # box with credentials for only one backend auto-selects it even when
-    # other providers (fal/xai) register unconditionally without keys.
-    # Mirrors agent/image_gen_registry.get_active_provider().
-    available = [p for p in snapshot.values() if _is_available_safe(p)]
-    if len(available) == 1:
-        return available[0]
-
-    return None
+    return _REGISTRY.resolve_active(
+        configured,
+        configured_desc="video_gen.provider",
+        fail_closed_on_missing_configured=True,
+    )
 
 
 def _reset_for_tests() -> None:
     """Clear the registry. **Test-only.**"""
-    with _lock:
-        _providers.clear()
+    _REGISTRY.reset_for_tests()

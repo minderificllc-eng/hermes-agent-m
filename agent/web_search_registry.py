@@ -28,21 +28,37 @@ The capability filter (``supports_search`` / ``supports_extract``) is
 applied at every step so a search-only provider (``brave-free``)
 configured as ``web.extract_backend`` correctly falls through to an
 extract-capable backend.
+
+Explicit config wins **ignoring availability**: a configured provider is
+returned even if its :meth:`is_available` reports False, so the dispatcher
+surfaces a precise "X_API_KEY is not set" error instead of silently routing
+somewhere else. Matches legacy :func:`tools.web_tools._get_backend`
+behavior for configured names.
+
+Implementation lives in :class:`agent.capability_registry.CapabilityRegistry`;
+this module owns the instance, the legacy order, the config reads, and the
+public surface.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from agent.capability_registry import CapabilityRegistry
 from agent.web_search_provider import WebSearchProvider
 
 logger = logging.getLogger(__name__)
 
+_REGISTRY: CapabilityRegistry[WebSearchProvider] = CapabilityRegistry(
+    label="Web",
+    provider_type=WebSearchProvider,
+    logger=logger,
+)
 
-_providers: Dict[str, WebSearchProvider] = {}
-_lock = threading.Lock()
+# Test-visible aliases: existing tests mutate these in place.
+_providers = _REGISTRY._providers
+_lock = _REGISTRY._lock
 
 
 def register_provider(provider: WebSearchProvider) -> None:
@@ -52,42 +68,17 @@ def register_provider(provider: WebSearchProvider) -> None:
     a debug message — makes hot-reload scenarios (tests, dev loops) behave
     predictably.
     """
-    if not isinstance(provider, WebSearchProvider):
-        raise TypeError(
-            f"register_provider() expects a WebSearchProvider instance, "
-            f"got {type(provider).__name__}"
-        )
-    name = provider.name
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("Web provider .name must be a non-empty string")
-    with _lock:
-        existing = _providers.get(name)
-        _providers[name] = provider
-    if existing is not None:
-        logger.debug(
-            "Web provider '%s' re-registered (was %r)",
-            name, type(existing).__name__,
-        )
-    else:
-        logger.debug(
-            "Registered web provider '%s' (%s)",
-            name, type(provider).__name__,
-        )
+    _REGISTRY.register(provider)
 
 
 def list_providers() -> List[WebSearchProvider]:
     """Return all registered providers, sorted by name."""
-    with _lock:
-        items = list(_providers.values())
-    return sorted(items, key=lambda p: p.name)
+    return _REGISTRY.list_providers()
 
 
 def get_provider(name: str) -> Optional[WebSearchProvider]:
     """Return the provider registered under *name*, or None."""
-    if not isinstance(name, str):
-        return None
-    with _lock:
-        return _providers.get(name.strip())
+    return _REGISTRY.get_provider(name)
 
 
 # ---------------------------------------------------------------------------
@@ -133,36 +124,12 @@ _LEGACY_PREFERENCE = (
 def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearchProvider]:
     """Resolve the active provider for a capability ("search" | "extract").
 
-    Resolution rules (in order):
-
-    1. **Explicit config wins, ignoring availability.** If
-       ``web.{capability}_backend`` or ``web.backend`` names a registered
-       provider that supports *capability*, return it even if its
-       :meth:`is_available` returns False — the dispatcher will surface a
-       precise "X_API_KEY is not set" error to the user instead of silently
-       routing somewhere else. Matches legacy
-       :func:`tools.web_tools._get_backend` behavior for configured names.
-
-    2. **Single-provider shortcut.** When only one registered provider
-       supports *capability* AND ``is_available()`` reports True, return it.
-
-    3. **Legacy preference walk, filtered by availability.** Walk the
-       :data:`_LEGACY_PREFERENCE` order (firecrawl → parallel → tavily →
-       exa → searxng → brave-free → ddgs) looking for a provider whose
-       ``supports_<capability>()`` is True AND whose ``is_available()`` is
-       True. Matches the historic ``tools.web_tools._get_backend()``
-       candidate order so users with credentials but no explicit config
-       key keep landing on the same provider as pre-migration. This is
-       the path that fires when no config key is set — pick the
-       highest-priority backend the user actually has credentials for.
-
-    Returns None when no provider is configured AND no available provider
-    matches the legacy preference; the dispatcher then returns a "set up a
-    provider" error to the user.
+    Rules, in order: explicit config wins ignoring availability (a
+    configured provider that doesn't support *capability* falls through),
+    single capability-eligible + available provider shortcut, then the
+    :data:`_LEGACY_PREFERENCE` walk filtered by capability + availability.
+    See the module docstring for the full contract.
     """
-    with _lock:
-        snapshot = dict(_providers)
-
     def _capable(p: WebSearchProvider) -> bool:
         if capability == "search":
             return bool(p.supports_search())
@@ -170,53 +137,12 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
             return bool(p.supports_extract())
         return False
 
-    def _is_available_safe(p: WebSearchProvider) -> bool:
-        """Wrap ``is_available()`` so a buggy provider doesn't kill resolution."""
-        try:
-            return bool(p.is_available())
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("provider %s.is_available() raised %s", p.name, exc)
-            return False
-
-    # 1. Explicit config wins — return regardless of is_available() so the
-    #    user gets a precise downstream error message rather than a silent
-    #    backend switch. Matches _get_backend() in web_tools.py.
-    if configured:
-        provider = snapshot.get(configured)
-        if provider is not None and _capable(provider):
-            return provider
-        if provider is None:
-            logger.debug(
-                "web backend '%s' configured but not registered; falling back",
-                configured,
-            )
-        else:
-            logger.debug(
-                "web backend '%s' configured but does not support '%s'; falling back",
-                configured, capability,
-            )
-
-    # 2. + 3. Fallback path — filter by availability so we don't surface
-    #    a provider the user has no credentials for. Without this filter,
-    #    a registered-but-unconfigured provider could end up "active" on
-    #    a fresh install with no API keys at all.
-    eligible = [
-        p for p in snapshot.values()
-        if _capable(p) and _is_available_safe(p)
-    ]
-    if len(eligible) == 1:
-        return eligible[0]
-
-    for legacy in _LEGACY_PREFERENCE:
-        provider = snapshot.get(legacy)
-        if (
-            provider is not None
-            and _capable(provider)
-            and _is_available_safe(provider)
-        ):
-            return provider
-
-    return None
+    return _REGISTRY.resolve_active(
+        configured,
+        configured_desc="web backend",
+        capability_filter=_capable,
+        legacy_preference=_LEGACY_PREFERENCE,
+    )
 
 
 def _disabled_web_plugin_for(configured: Optional[str] = None, *, capability: Optional[str] = None) -> Optional[str]:
@@ -300,5 +226,4 @@ def get_active_extract_provider() -> Optional[WebSearchProvider]:
 
 def _reset_for_tests() -> None:
     """Clear the registry. **Test-only.**"""
-    with _lock:
-        _providers.clear()
+    _REGISTRY.reset_for_tests()
