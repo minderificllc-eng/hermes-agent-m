@@ -78,8 +78,10 @@ class TestReasoningCommand:
         assert "level" in result and "show" in result and "hide" in result
 
     def test_reasoning_is_known_command(self):
-        source = inspect.getsource(gateway_run.GatewayRunner._handle_message)
-        assert '"reasoning"' in source
+        # /reasoning is dispatched via the uniform-command table (previously an
+        # inline `if canonical == "reasoning"` block in _handle_message).
+        from gateway.run import _GATEWAY_UNIFORM_COMMANDS
+        assert _GATEWAY_UNIFORM_COMMANDS.get("reasoning") == "_handle_reasoning_command"
 
     def test_parse_reasoning_command_args_accepts_ascii_and_smart_global_flags(self):
         assert gateway_run.GatewayRunner._parse_reasoning_command_args("high --global") == ("high", True)
