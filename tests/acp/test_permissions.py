@@ -3,6 +3,8 @@
 import asyncio
 import inspect
 from concurrent.futures import Future
+
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from acp.schema import (
@@ -250,7 +252,12 @@ class TestSchedulerFailure:
 
         assert result == "deny"
         assert created["coro"] is not None
-        assert created["coro"].cr_frame is None
+        # Python 3.12 keeps cr_frame set after close() (the 3.11 `cr_frame is
+        # None` proxy no longer holds). Assert the functional contract: a
+        # closed coroutine raises RuntimeError on reuse, while an unclosed
+        # never-started one would raise StopIteration here instead.
+        with pytest.raises(RuntimeError, match="already awaited"):
+            created["coro"].send(None)
         runtime_warnings = [
             w for w in caught
             if issubclass(w.category, RuntimeWarning)

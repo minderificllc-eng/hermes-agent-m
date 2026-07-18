@@ -667,7 +667,12 @@ class TestRunOnMcpLoop:
                 gc.collect()
 
         assert created["coro"] is not None
-        assert created["coro"].cr_frame is None
+        # Python 3.12 keeps cr_frame set after close() (the 3.11 `cr_frame is
+        # None` proxy no longer holds). Assert the functional contract: a
+        # closed coroutine raises RuntimeError on reuse, while an unclosed
+        # never-started one would raise StopIteration here instead.
+        with pytest.raises(RuntimeError, match="already awaited"):
+            created["coro"].send(None)
         runtime_warnings = [
             w for w in caught
             if issubclass(w.category, RuntimeWarning)
@@ -693,7 +698,12 @@ class TestRunOnMcpLoop:
                     mcp._run_on_mcp_loop(coro)
                 gc.collect()
 
-        assert coro.cr_frame is None
+        # Python 3.12 keeps cr_frame set after close() (the 3.11 `cr_frame is
+        # None` proxy no longer holds). Assert the functional contract: a
+        # closed coroutine raises RuntimeError on reuse, while an unclosed
+        # never-started one would raise StopIteration here instead.
+        with pytest.raises(RuntimeError, match="already awaited"):
+            coro.send(None)
         runtime_warnings = [
             w for w in caught
             if issubclass(w.category, RuntimeWarning)
