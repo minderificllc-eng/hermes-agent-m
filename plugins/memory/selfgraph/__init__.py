@@ -300,6 +300,22 @@ class SelfGraphStore:
 class SelfGraphMemoryProvider(MemoryProvider):
     """MemoryProvider seam wrapper around :class:`SelfGraphStore`."""
 
+    # Opt in to the post-turn background-review fork (the eval doc's
+    # "cognify background extraction pass"): the review may populate the
+    # graph asynchronously via explicit tool calls, so extraction never
+    # adds turn latency and never churns the cached prompt prefix. Safe to
+    # share across threads: SelfGraphStore serializes on an RLock.
+    background_review_instructions = (
+        "Self-model graph: as part of this review, persist durable "
+        "self-knowledge from the conversation using the self_graph_remember "
+        "tool — the people you work with, projects, episodes worth keeping "
+        "(what happened and how you decided), values you acted on, "
+        "commitments you made, skills you exercised. Call self_graph_recall "
+        "first to see what already exists, and update or link rather than "
+        "create near-duplicates. Record what shapes who you are; skip "
+        "transient task detail. It is fine to record nothing."
+    )
+
     def __init__(self, config: Optional[dict] = None):
         self._config = config or {}
         self._store: Optional[SelfGraphStore] = None

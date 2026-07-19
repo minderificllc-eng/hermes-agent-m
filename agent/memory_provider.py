@@ -43,6 +43,18 @@ logger = logging.getLogger(__name__)
 class MemoryProvider(ABC):
     """Abstract base class for memory providers."""
 
+    #: Background-review opt-in. When non-empty, the post-turn background
+    #: review fork exposes this provider's TOOLS (dispatch + runtime
+    #: whitelist) and appends this text to the review prompt, so the review
+    #: can make deliberate writes to the provider (e.g. the selfgraph
+    #: plugin's async self-model population). Ambient ingestion stays
+    #: disabled inside the fork regardless — the fork's manager no-ops
+    #: prefetch/sync/lifecycle hooks, so only explicit tool calls reach the
+    #: provider (see agent.background_review._ReviewToolsOnlyMemoryManager).
+    #: The provider instance is SHARED with the review thread; opt in only
+    #: if handle_tool_call is thread-safe. Default: opted out.
+    background_review_instructions: str = ""
+
     @property
     @abstractmethod
     def name(self) -> str:

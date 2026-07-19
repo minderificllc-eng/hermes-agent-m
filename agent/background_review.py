@@ -23,9 +23,114 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from agent.memory_manager import MemoryManager, inject_memory_provider_tools
 from agent.thread_scoped_output import thread_scoped_silence
 
 logger = logging.getLogger(__name__)
+
+
+class _ReviewToolsOnlyMemoryManager(MemoryManager):
+    """Tool dispatch only — every ambient/lifecycle hook is a no-op.
+
+    The review fork runs with ``skip_memory=True`` precisely so its harness
+    prompt never leaks into external memory providers via
+    on_turn_start/prefetch_all/sync_all (see the skip_memory note in
+    ``_run_review_in_thread``). Providers that opt in to DELIBERATE
+    background-review writes (non-empty ``background_review_instructions``)
+    share their live instances through this manager, which preserves that
+    isolation: only explicit tool calls reach the provider. The lifecycle
+    no-ops also matter for teardown — the fork calls
+    ``shutdown_memory_provider()``/``close()`` on itself, and the PARENT
+    owns the shared providers, so ``shutdown_all``/``on_session_end`` here
+    must never touch them. ``sync_all``/``queue_prefetch_all`` no-oping
+    also means the lazy sync executor is never created — no stray threads.
+
+    A drift guard in ``tests/agent/test_background_review_memory_tools.py``
+    pins that every public ``MemoryManager`` method is either in the
+    dispatch allowlist or overridden here, so a future ambient hook added
+    to the manager must be explicitly classified.
+    """
+
+    def initialize_all(self, *args, **kwargs) -> None:
+        return None  # providers are already live on the parent
+
+    def build_system_prompt(self) -> str:
+        return ""
+
+    def prefetch_all(self, *args, **kwargs) -> str:
+        return ""
+
+    def queue_prefetch_all(self, *args, **kwargs) -> None:
+        return None
+
+    def sync_all(self, *args, **kwargs) -> None:
+        return None
+
+    def flush_pending(self, *args, **kwargs) -> bool:
+        return True
+
+    def on_turn_start(self, *args, **kwargs) -> None:
+        return None
+
+    def on_session_end(self, *args, **kwargs) -> None:
+        return None
+
+    def on_session_switch(self, *args, **kwargs) -> None:
+        return None
+
+    def on_pre_compress(self, *args, **kwargs) -> str:
+        return ""
+
+    def on_memory_write(self, *args, **kwargs) -> None:
+        return None
+
+    def notify_memory_tool_write(self, *args, **kwargs) -> None:
+        return None
+
+    def on_delegation(self, *args, **kwargs) -> None:
+        return None
+
+    def commit_session_boundary_async(self, *args, **kwargs) -> None:
+        return None
+
+    def shutdown_all(self) -> None:
+        return None  # parent owns provider lifecycle
+
+
+def _build_review_memory_manager(agent: Any):
+    """Collect opted-in memory providers into a tools-only manager.
+
+    Scans the parent agent's live memory providers for ones that declare
+    non-empty ``background_review_instructions``. Returns
+    ``(manager, instructions)`` where ``manager`` shares those provider
+    INSTANCES (same store, same locks) behind
+    :class:`_ReviewToolsOnlyMemoryManager`, or ``(None, [])`` when nothing
+    opted in.
+    """
+    parent_mm = getattr(agent, "_memory_manager", None)
+    if parent_mm is None:
+        return None, []
+    try:
+        providers = parent_mm.providers
+    except Exception:
+        return None, []
+    opted, instructions = [], []
+    for provider in providers:
+        try:
+            text = str(
+                getattr(provider, "background_review_instructions", "") or ""
+            ).strip()
+        except Exception:
+            continue
+        if text:
+            opted.append(provider)
+            instructions.append(text)
+    if not opted:
+        return None, []
+    manager = _ReviewToolsOnlyMemoryManager()
+    for provider in opted:
+        manager.add_provider(provider)
+    return manager, instructions
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +911,23 @@ def _run_review_in_thread(
             # agent.compression_enabled, so this short-circuits both paths.
             review_agent.compression_enabled = False
 
+            # DELIBERATE-WRITE SEAM (async self-model graph population):
+            # providers that opt in via non-empty
+            # ``background_review_instructions`` (e.g. the selfgraph plugin)
+            # share their live instances with the fork through a tools-only
+            # manager, so the review can persist durable knowledge with
+            # explicit tool calls. The skip_memory isolation above is
+            # unchanged for ambient ingestion — every lifecycle/ingestion
+            # hook on the tools-only manager is a no-op, and the fork's
+            # teardown cannot shut down the parent's live providers.
+            # Injecting the schemas also keeps tools[] parity with the
+            # parent for these tools (the parent injected the same schemas
+            # at its own init).
+            _graph_mm, _graph_instructions = _build_review_memory_manager(agent)
+            if _graph_mm is not None:
+                review_agent._memory_manager = _graph_mm
+                inject_memory_provider_tools(review_agent)
+
             from model_tools import get_tool_definitions
             from hermes_cli.plugins import (
                 set_thread_tool_whitelist,
@@ -826,6 +948,8 @@ def _run_review_in_thread(
                     quiet_mode=True,
                 )
             }
+            if _graph_mm is not None:
+                review_whitelist |= _graph_mm.get_all_tool_names()
             set_thread_tool_whitelist(
                 review_whitelist,
                 deny_msg_fmt=(
@@ -851,6 +975,10 @@ def _run_review_in_thread(
                 review_agent.run_conversation(
                     user_message=(
                         prompt
+                        + (
+                            "\n\n" + "\n\n".join(_graph_instructions)
+                            if _graph_instructions else ""
+                        )
                         + "\n\nYou can only call memory and skill "
                         "management tools. Other tools will be denied "
                         "at runtime — do not attempt them."
