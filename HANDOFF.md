@@ -1,6 +1,6 @@
 # OotSim — Session Handoff
 
-**Last updated:** 2026-07-17
+**Last updated:** 2026-07-18
 **Repo:** `minderificllc-eng/hermes-agent-m`
 **Prior working branch:** `claude/alignment-framing-audit-74k096` (now merged to `main`)
 
@@ -406,41 +406,62 @@ Also hard-won environment/verification lessons:
   SQLITE_DBCONFIG_DEFENSIVE on; stock bash is 3.2 (no BASHPID); zombie
   processes pass `kill(pid, 0)`.
 
-### ⚠️ In-flight at session end: selfgraph pilot (PILOT STATUS, working)
+### selfgraph pilot — ROADMAP COMPLETE (2026-07-18, 4 commits)
 
 `plugins/memory/selfgraph/` + `tests/plugins/memory/test_selfgraph.py` —
 the cognee-inspired self-model graph pilot (typed nodes with a first-class
 Self node, remember/recall/forget tools, FTS5 + 1-hop expansion,
 usage-weighted salience decay, stable core-self prompt block), SQLite-only
-behind the `MemoryProvider` seam, auto-discovered, zero core changes.
-**Verified interactively end-to-end** (remember → recall → core block →
-discovery) after fixing a real deadlock the behavioral run caught
-(remember() held a non-reentrant Lock then re-entered via self_id →
-switched to RLock — review alone missed it). Known open items, in order:
-1. `recall()`'s FTS join is AND-semantics; natural-question prefetch
-   ("who is X?") matches nothing — change the term join to `" OR "` in
-   `SelfGraphStore.recall` (edit was drafted but not applied at wrap-up).
-2. Re-run `scripts/run_tests.sh tests/plugins/memory/test_selfgraph.py`
-   (the only runner run was against the pre-RLock deadlock version, which
-   timed out; post-fix the suite has not been run — do this FIRST).
-3. Then the eval doc's next steps: async population from the
-   background_review fork, curator-driven consolidation/decay.
+behind the `MemoryProvider` seam, auto-discovered. All of the eval doc's
+recommended-path steps are now shipped and runner-verified:
+
+1. ✅ OR-join FTS recall (natural questions match on any term) + first
+   post-RLock runner-verified suite run (`037fa0b49`).
+2. ✅ **Async graph population from the background_review fork**
+   (`7380fc4eb`) — a generic deliberate-write seam:
+   `MemoryProvider.background_review_instructions` (default `""` =
+   opted out); a provider that sets it non-empty gets its tools exposed
+   inside the review fork (dispatch + whitelist + tools[] parity) and the
+   text appended to the review prompt.
+   `background_review._ReviewToolsOnlyMemoryManager` shares the parent's
+   live provider instances but no-ops EVERY ambient/lifecycle hook —
+   skip_memory isolation is unchanged (harness prompt never leaks; fork
+   teardown can't shut down the parent's providers). A drift-guard test
+   (`tests/agent/test_background_review_memory_tools.py`) forces any new
+   public MemoryManager method to be classified dispatch-or-ambient.
+3. ✅ **Curator-style consolidation/decay** (`602122b2b`) — deterministic,
+   self-scheduled (no LLM, no core changes): `consolidate()` folds
+   effective salience into base (continuous across the fold), prunes
+   ≥30-day-old nodes under a 0.05 salience floor (never Self), halves
+   edge reinforcement above the 1.0 base; time-gated via a `meta` marker
+   (24h default, `consolidate_interval_hours` config, ≤0 disables),
+   triggered at `initialize()` + hourly re-check from `prefetch()`.
+   `self_summary()` now touches rendered nodes (core-block render IS
+   usage — else core nodes decay as if unused and get pruned).
+4. ✅ Derived self-facts instruction (`db30c2ecf`) — the review fork is
+   asked to record pattern-derived insights as Value/Fact nodes.
+
+Known deliberate limits (not bugs): graph writes don't appear in the
+review's human-facing summary (`summarize_background_review_actions`
+only knows `memory`/`skill_manage`; hardcoding plugin tool names in core
+was rejected — a generic notify seam is a candidate follow-up), and the
+review sees one conversation, so derived facts depend on it choosing to
+recall.
 
 ### Next work, in leverage order
 
-1. **`run_conversation` split steps (b)+(c)** — the ONE remaining
-   refactor mega-item; see §3 item 3 for the full scoping (TurnAttempt
-   extraction; recovery-cascade strategy table — arms are entangled
-   procedures, do ONE ARM AT A TIME with a provider-error repro each).
+1. **North star, next increments** (selfgraph pilot + roadmap are done —
+   see above): candidates, none yet chosen by the human — (a) enable and
+   live-test selfgraph as the active `memory.provider` across real
+   sessions (the pilot is code-verified but not yet lived-in); (b) a
+   generic review-summary notify seam so provider tool writes surface in
+   the 💾 self-improvement summary; (c) richer graph retrieval
+   (embedding/semantic seeds, multi-hop); (d) the human's MoE integration
+   (other Minderific repos — do not infer its design from this one).
 2. **Opportunistic adoptions** (safe, unbounded backlog): `cfg_get` for
    genuine config `.get().get()` chains; `get_setting` where a site's
    falsy-vs-None intent is confirmed; `model_capabilities()` for any new
    prompt-side family checks.
-3. **The actual north star**: with the refactor substrate clean, the next
-   frontier is the **self-memory graph** (cognee-inspired; source at
-   `../cognee`, eval in `docs/cognee-ideas-evaluation.md`, pilot path =
-   `plugins/memory/cognee/` behind the existing `MemoryProvider` seam) and
-   later the human's MoE integration (other Minderific repos — do not
-   infer its design from this one).
+3. Refactor backlog: only the optional low-value items at the end of §3.
 4. Decision confirmed by the human: **refactor in place, no rewrite** —
    new-build only for genuinely new subsystems against existing seams.
