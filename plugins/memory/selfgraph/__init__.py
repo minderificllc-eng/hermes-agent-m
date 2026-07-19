@@ -18,7 +18,9 @@ Adopt/adapt decisions implemented here (see the eval doc's table):
 - **memify-lite (ADAPT)** — every recall/touch bumps ``touch_count`` and
   ``last_touched``; salience combines base salience, usage, and recency
   decay, so salient memories strengthen and trivia fades without a
-  background service.
+  background service. A curator-style ``consolidate()`` pass (self-
+  scheduled, time-gated) periodically folds usage into base salience,
+  halves accumulated edge reinforcement, and prunes long-faded trivia.
 - **remember / recall / forget verbs (ADOPT)** — exposed as agent tools.
 - **Dual retrieval (ADAPT)** — FTS5 lexical match seeds the result set,
   then 1-hop graph expansion pulls the connected subgraph (the
@@ -31,6 +33,7 @@ Adopt/adapt decisions implemented here (see the eval doc's table):
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import threading
@@ -39,6 +42,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
+
+logger = logging.getLogger(__name__)
 
 # Small, code-defined ontology (cognee's DataPoint idea, minus Pydantic).
 NODE_TYPES = (
@@ -86,10 +91,22 @@ CREATE TRIGGER IF NOT EXISTS node_au AFTER UPDATE ON nodes BEGIN
     VALUES ('delete', old.id, old.name, old.summary);
     INSERT INTO node_fts(rowid, name, summary) VALUES (new.id, new.name, new.summary);
 END;
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # Salience half-life: without touches, effective salience halves this often.
 _DECAY_HALF_LIFE_DAYS = 30.0
+
+# Consolidation (memify-lite maintenance pass) defaults.
+_CONSOLIDATE_INTERVAL_HOURS = 24.0
+# A node whose effective salience has decayed below this is prunable trivia…
+_PRUNE_SALIENCE_FLOOR = 0.05
+# …but only once it is at least this old (the curator's "absence of evidence
+# is not evidence of staleness" grace floor, applied to memories).
+_PRUNE_MIN_AGE_DAYS = 30.0
 
 
 class SelfGraphStore:
@@ -209,8 +226,9 @@ class SelfGraphStore:
                 except sqlite3.OperationalError:
                     seeds = []
             else:
+                # salience tiebreak: consolidation equalizes last_touched.
                 seeds = [r[0] for r in self._conn.execute(
-                    "SELECT id FROM nodes ORDER BY last_touched DESC LIMIT ?",
+                    "SELECT id FROM nodes ORDER BY last_touched DESC, salience DESC LIMIT ?",
                     (limit * 2,),
                 ).fetchall()]
             # 1-hop expansion: pull neighbours of every seed.
@@ -278,19 +296,118 @@ class SelfGraphStore:
         return {"ok": True, "forgotten": name}
 
     def self_summary(self, *, limit: int = 6) -> str:
-        """Compact, stable core-self block: strongest edges from Self."""
+        """Compact, stable core-self block: strongest edges from Self.
+
+        Rendering into the core prompt block IS usage — without the touch
+        below, the nodes shown in every session's system prompt would decay
+        as if unused and eventually be pruned out from under the block.
+        """
+        now = time.time()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT e.relation, n.type, n.name, n.summary"
+                "SELECT n.id, e.relation, n.type, n.name, n.summary"
                 " FROM edges e JOIN nodes n ON n.id = e.dst"
                 " WHERE e.src=? ORDER BY e.weight DESC, n.salience DESC LIMIT ?",
                 (self.self_id, limit),
             ).fetchall()
+            if rows:
+                marks = ",".join("?" * len(rows))
+                self._conn.execute(
+                    f"UPDATE nodes SET touch_count=touch_count+1, last_touched=? WHERE id IN ({marks})",
+                    [now] + [r[0] for r in rows],
+                )
+                self._conn.commit()
         if not rows:
             return ""
         lines = [f"- {rel} → {ntype} “{name}”" + (f": {summary}" if summary else "")
-                 for rel, ntype, name, summary in rows]
+                 for _nid, rel, ntype, name, summary in rows]
         return "\n".join(lines)
+
+    def consolidate(
+        self,
+        *,
+        now: Optional[float] = None,
+        prune_floor: float = _PRUNE_SALIENCE_FLOOR,
+        min_age_days: float = _PRUNE_MIN_AGE_DAYS,
+    ) -> Dict[str, int]:
+        """memify-lite maintenance pass (the curator-style consolidation step).
+
+        - **Fold**: each node's usage-and-decay-adjusted effective salience
+          becomes its new base salience and its touch counter resets, so
+          frequently-recalled memories are permanently strengthened and
+          untouched ones bank their decay. Continuity holds: effective
+          salience is unchanged at the moment of folding.
+        - **Prune**: non-Self nodes whose effective salience fell below
+          ``prune_floor`` AND that are at least ``min_age_days`` old are
+          deleted (trivia fades; young nodes get a grace floor). ``Self`` is
+          never pruned; deliberate removal stays ``forget()``.
+        - **Edge decay**: accumulated reinforcement (weight above the 1.0
+          base) is halved, so repeated re-remembering matters only while it
+          keeps happening.
+
+        Returns a counter dict describing what changed.
+        """
+        if now is None:
+            now = time.time()
+        counts = {"folded": 0, "pruned": 0, "edges_decayed": 0}
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, type, salience, created_at, last_touched, touch_count FROM nodes"
+            ).fetchall()
+            prune_ids: List[int] = []
+            for nid, ntype, salience, created, touched, count in rows:
+                if ntype == "Self":
+                    continue
+                eff = self._effective_salience(salience, touched, count, now)
+                age_days = (now - created) / 86400.0
+                if eff < prune_floor and age_days >= min_age_days:
+                    prune_ids.append(nid)
+                    continue
+                self._conn.execute(
+                    "UPDATE nodes SET salience=?, touch_count=0, last_touched=? WHERE id=?",
+                    (eff, now, nid),
+                )
+                counts["folded"] += 1
+            if prune_ids:
+                marks = ",".join("?" * len(prune_ids))
+                # Edges cascade (FK ON DELETE CASCADE); FTS via the delete trigger.
+                self._conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", prune_ids)
+                counts["pruned"] = len(prune_ids)
+            cur = self._conn.execute(
+                "UPDATE edges SET weight = 1.0 + (weight - 1.0) / 2 WHERE weight > 1.0"
+            )
+            counts["edges_decayed"] = max(0, cur.rowcount)
+            self._conn.execute(
+                "INSERT INTO meta(key, value) VALUES ('last_consolidated_at', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (repr(now),),
+            )
+            self._conn.commit()
+        return counts
+
+    def maybe_consolidate(
+        self,
+        *,
+        interval_hours: float = _CONSOLIDATE_INTERVAL_HOURS,
+        now: Optional[float] = None,
+    ) -> Optional[Dict[str, int]]:
+        """Run :meth:`consolidate` if the last run is older than the interval.
+
+        Returns the consolidation counters, or ``None`` when not due yet.
+        """
+        if now is None:
+            now = time.time()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key='last_consolidated_at'"
+            ).fetchone()
+        if row:
+            try:
+                if now - float(row[0]) < interval_hours * 3600.0:
+                    return None
+            except ValueError:
+                pass  # malformed marker — reconsolidate and rewrite it
+        return self.consolidate(now=now)
 
     def close(self) -> None:
         with self._lock:
@@ -319,6 +436,10 @@ class SelfGraphMemoryProvider(MemoryProvider):
     def __init__(self, config: Optional[dict] = None):
         self._config = config or {}
         self._store: Optional[SelfGraphStore] = None
+        # Next wall-clock time we bother re-checking the consolidation
+        # marker (cheap in-memory gate so long-lived gateway sessions still
+        # consolidate without hitting SQLite every prefetch).
+        self._next_consolidate_check = 0.0
 
     @property
     def name(self) -> str:
@@ -337,11 +458,34 @@ class SelfGraphMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs) -> None:
         if self._store is None:
             self._store = SelfGraphStore(self._db_path())
+        self._maybe_consolidate()
 
     def _require_store(self) -> SelfGraphStore:
         if self._store is None:
             self._store = SelfGraphStore(self._db_path())
         return self._store
+
+    def _maybe_consolidate(self) -> None:
+        """Time-gated curator-style maintenance (never raises)."""
+        self._next_consolidate_check = time.time() + 3600.0
+        try:
+            interval = float(
+                self._config.get("consolidate_interval_hours", _CONSOLIDATE_INTERVAL_HOURS)
+            )
+        except (TypeError, ValueError):
+            interval = _CONSOLIDATE_INTERVAL_HOURS
+        if interval <= 0:
+            return  # disabled by config
+        try:
+            counts = self._require_store().maybe_consolidate(interval_hours=interval)
+        except Exception:
+            logger.debug("selfgraph consolidation failed (non-fatal)", exc_info=True)
+            return
+        if counts and (counts["pruned"] or counts["edges_decayed"] or counts["folded"]):
+            logger.info(
+                "selfgraph consolidated: %d folded, %d pruned, %d edges decayed",
+                counts["folded"], counts["pruned"], counts["edges_decayed"],
+            )
 
     def system_prompt_block(self) -> str:
         core = self._require_store().self_summary()
@@ -352,6 +496,10 @@ class SelfGraphMemoryProvider(MemoryProvider):
         return "## Self-model (core)\n" + core
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
+        # Long-lived sessions (gateway) never re-run initialize(); re-check
+        # the consolidation marker at most hourly from the per-turn path.
+        if time.time() >= self._next_consolidate_check:
+            self._maybe_consolidate()
         if not query.strip():
             return ""
         results = self._require_store().recall(query, limit=5)
