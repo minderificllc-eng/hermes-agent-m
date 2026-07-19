@@ -429,8 +429,11 @@ class SelfGraphMemoryProvider(MemoryProvider):
         "(what happened and how you decided), values you acted on, "
         "commitments you made, skills you exercised. Call self_graph_recall "
         "first to see what already exists, and update or link rather than "
-        "create near-duplicates. Record what shapes who you are; skip "
-        "transient task detail. It is fine to record nothing."
+        "create near-duplicates. If recall shows a pattern across existing "
+        "memories ('I keep choosing X'), record the insight it implies as a "
+        "Value or Fact node — derived self-knowledge is the most valuable "
+        "kind. Record what shapes who you are; skip transient task detail. "
+        "It is fine to record nothing."
     )
 
     def __init__(self, config: Optional[dict] = None):
